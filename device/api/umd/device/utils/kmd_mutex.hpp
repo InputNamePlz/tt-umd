@@ -4,7 +4,13 @@
 
 #pragma once
 
+#ifndef _WIN32
 #include <sys/types.h>  // pid_t
+#else
+// POSIX pid_t, used in the public probe_lock() return type. On Windows it is a plain int
+// (process/thread ids fit in 32 bits).
+using pid_t = int;
+#endif
 
 #include <chrono>
 #include <cstdint>
