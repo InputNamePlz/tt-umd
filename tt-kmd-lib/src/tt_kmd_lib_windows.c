@@ -540,6 +540,60 @@ int tt_windows_unmap_bar(tt_device_t* dev, void* va) {
     return ttwind_ioctl(dev->handle, IOCTL_TTWIND_UNMAP_BAR, &in, sizeof(in), NULL, 0);
 }
 
+/* --- host system memory (sysmem) ---------------------------------------- */
+
+int tt_windows_query_sysmem(tt_device_t* dev, tt_sysmem_info_t* out_info) {
+    if (out_info != NULL) {
+        memset(out_info, 0, sizeof(*out_info));
+    }
+    if (dev == NULL || out_info == NULL) {
+        return -EINVAL;
+    }
+
+    TTWIND_QUERY_SYSMEM_OUT out;
+    memset(&out, 0, sizeof(out));
+    int err = ttwind_ioctl(dev->handle, IOCTL_TTWIND_QUERY_SYSMEM, NULL, 0, &out, sizeof(out));
+    if (err != 0) {
+        return err;
+    }
+
+    out_info->total_size = out.TotalSize;
+    out_info->noc_address = out.NocAddress;
+    out_info->device_io_addr = out.DeviceIoAddr;
+    out_info->channel_size = out.ChannelSize;
+    out_info->channel_count = out.ChannelCount;
+    out_info->max_map_bytes = out.MaxMapBytes;
+    out_info->pcie_tile_x = out.PcieTileX;
+    return 0;
+}
+
+int tt_windows_map_sysmem(tt_device_t* dev, uint64_t offset, uint64_t length, void** out_va) {
+    if (out_va != NULL) {
+        *out_va = NULL;
+    }
+    if (dev == NULL || out_va == NULL) {
+        return -EINVAL;
+    }
+    if (length == 0 || (offset & 0xFFFu) != 0 || (length & 0xFFFu) != 0) {
+        return -EINVAL;
+    }
+
+    TTWIND_MAP_SYSMEM_IN in;
+    TTWIND_MAP_SYSMEM_OUT out;
+    memset(&in, 0, sizeof(in));
+    memset(&out, 0, sizeof(out));
+    in.Offset = offset;
+    in.Length = length;
+
+    int err = ttwind_ioctl(dev->handle, IOCTL_TTWIND_MAP_SYSMEM, &in, sizeof(in), &out, sizeof(out));
+    if (err != 0) {
+        return err;
+    }
+
+    *out_va = (void*)(uintptr_t)out.UserVa;
+    return 0;
+}
+
 /* --- TLB windows -------------------------------------------------------- */
 
 static void fill_tlb_config(TTWIND_NOC_TLB_CONFIG* out, const tt_noc_addr_config_t* config) {
