@@ -1163,18 +1163,7 @@ std::filesystem::path ClusterDescriptor::serialize_to_file(const std::filesystem
 }
 
 std::filesystem::path ClusterDescriptor::get_default_cluster_descriptor_file_path() const {
-#ifdef _WIN32
-    // mkdtemp() does not exist on Windows; a unique temp directory scheme is not implemented yet.
-    UMD_THROW(
-        error::RuntimeError, "ClusterDescriptor::get_default_cluster_descriptor_file_path is not yet supported on Windows.");
-#else
-    std::filesystem::path temp_path = std::filesystem::temp_directory_path();
-    std::string cluster_path_dir_template = temp_path / "umd_XXXXXX";
-    std::filesystem::path cluster_path_dir = mkdtemp(cluster_path_dir_template.data());
-    std::filesystem::path cluster_path = cluster_path_dir / "cluster_descriptor.yaml";
-
-    return cluster_path;
-#endif
+    return utils::create_unique_temp_dir() / "cluster_descriptor.yaml";
 }
 
 std::set<uint32_t> ClusterDescriptor::get_active_eth_channels(ChipId chip_id) {
