@@ -122,6 +122,10 @@ private:
     int shm_fd_ = -1;
 #ifndef _WIN32
     pthread_mutex_wrapper* mutex_wrapper_ptr_ = nullptr;
+#else
+    // HANDLE of the named Windows mutex backing this lock (void* to keep windows.h out of this
+    // header). Named mutexes are natively robust: a crashed owner surfaces as WAIT_ABANDONED.
+    void* win_mutex_ = nullptr;
 #endif
     std::string mutex_name_;
 
