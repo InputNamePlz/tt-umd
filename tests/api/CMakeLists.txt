@@ -7,7 +7,6 @@ set(API_TESTS_SRCS
     test_device_memcpy.cpp
     test_risc_program.cpp
     test_tlb_manager.cpp
-    test_sysmem_manager.cpp
     test_simulation_sysmem_manager.cpp
     test_sim_multichip.cpp
     test_cluster_options.cpp
@@ -17,9 +16,19 @@ set(API_TESTS_SRCS
     test_jtag.cpp
     test_arc_telemetry.cpp
     test_firmware_info_provider.cpp
-    test_warm_reset.cpp
     test_tt_visible_devices.cpp
 )
+
+if(NOT WIN32)
+    # Linux-only tests: test_sysmem_manager exercises mmap-backed buffer mappings directly, and
+    # test_warm_reset drives fork/waitpid-based multi-process scenarios.
+    list(
+        APPEND
+        API_TESTS_SRCS
+        test_sysmem_manager.cpp
+        test_warm_reset.cpp
+    )
+endif()
 
 if(TT_UMD_BUILD_SIMULATION)
     list(APPEND API_TESTS_SRCS test_ttsim_device_io.cpp)
