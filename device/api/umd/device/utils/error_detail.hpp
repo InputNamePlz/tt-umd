@@ -9,8 +9,10 @@
 #ifndef UMD_ERROR_HPP_INTERNAL_INCLUDE
 #error "error_detail.hpp is a private header. Include umd/device/utils/error.hpp instead."
 #endif
+#ifndef _WIN32
 #include <cxxabi.h>
 #include <execinfo.h>
+#endif
 
 #include <cstdint>
 #include <cstdlib>
@@ -46,6 +48,12 @@ namespace tt::umd::error {
  * @return Vector of demangled stack frame strings, empty if capture fails.
  */
 static inline std::vector<std::string> get_stacktrace(uint32_t max_frames = 64, uint32_t skip = 1) {
+#ifdef _WIN32
+    // Stack trace capture is not yet supported on Windows; exceptions carry file/line only.
+    (void)max_frames;
+    (void)skip;
+    return std::vector<std::string>{};
+#else
     if (skip >= max_frames) {
         return std::vector<std::string>{};
     }
@@ -94,6 +102,7 @@ static inline std::vector<std::string> get_stacktrace(uint32_t max_frames = 64, 
     }
 
     return stack_frames;
+#endif  // _WIN32
 }
 
 /**
