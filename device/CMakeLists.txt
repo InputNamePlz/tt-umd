@@ -54,13 +54,9 @@ set_target_properties(
 
 if(MSVC)
     # UMD is C++17, but uses designated initializers, which GCC/Clang accept as a C++17 extension
-    # while MSVC only accepts them under /std:c++20.
-    set_target_properties(
-        tt-umd
-        PROPERTIES
-            CXX_STANDARD
-                20
-    )
+    # while MSVC only accepts them under /std:c++20. PUBLIC because the installed headers use them
+    # too, so consumers compiling against UMD headers with MSVC need C++20 as well.
+    target_compile_features(tt-umd PUBLIC cxx_std_20)
     # tt-logger's public logging macros use __VA_OPT__, which MSVC only supports with the
     # conformant preprocessor. PUBLIC so that consumers of UMD's headers get it too.
     target_compile_options(tt-umd PUBLIC /Zc:preprocessor)
