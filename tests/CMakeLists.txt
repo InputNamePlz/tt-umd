@@ -6,7 +6,7 @@ target_link_libraries(
         gtest_main
         gtest
         gmock
-        pthread
+        $<$<NOT:$<PLATFORM_ID:Windows>>:pthread>
         spdlog::spdlog_header_only
         fmt::fmt-header-only
         tt-logger::tt-logger

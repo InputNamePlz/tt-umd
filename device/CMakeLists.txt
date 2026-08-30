@@ -347,8 +347,9 @@ target_link_libraries(
     PUBLIC
         fmt::fmt-header-only
     PRIVATE
-        hwloc
-        rt
+        # hwloc and rt are Linux-only system libraries
+        $<$<NOT:$<PLATFORM_ID:Windows>>:hwloc>
+        $<$<NOT:$<PLATFORM_ID:Windows>>:rt>
         spdlog::spdlog_header_only
         tt-logger::tt-logger
         yaml-cpp::yaml-cpp
@@ -358,15 +359,17 @@ target_link_libraries(tt-umd PRIVATE umd_asio_lib)
 
 target_link_libraries(tt-umd PRIVATE tt-kmd-lib::tt-kmd-lib)
 
-check_function_exists(
-    backtrace
-    HAVE_BACKTRACE
-)
+if(NOT WIN32)
+    check_function_exists(
+        backtrace
+        HAVE_BACKTRACE
+    )
 
-if(NOT HAVE_BACKTRACE)
-    find_library(EXECINFO_LIB execinfo)
-    if(EXECINFO_LIB)
-        target_link_libraries(tt-umd PRIVATE ${EXECINFO_LIB})
+    if(NOT HAVE_BACKTRACE)
+        find_library(EXECINFO_LIB execinfo)
+        if(EXECINFO_LIB)
+            target_link_libraries(tt-umd PRIVATE ${EXECINFO_LIB})
+        endif()
     endif()
 endif()
 
