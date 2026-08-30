@@ -179,6 +179,7 @@ else()
             chip_helpers/silicon_sysmem_manager_windows.cpp
             pcie/pci_device_windows.cpp
             utils/robust_mutex_windows.cpp
+            utils/stacktrace_windows.cpp
             warm_reset_windows.cpp
     )
 endif()
