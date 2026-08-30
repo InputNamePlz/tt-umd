@@ -41,19 +41,23 @@ endif()
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/unified)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/wormhole)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/galaxy)
-add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/test_utils)
+if(NOT WIN32)
+    # Linux-only: the target's sole test exercises MultiProcessPipe, a fork/pipe helper.
+    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/test_utils)
+endif()
 
-add_custom_target(
-    umd_tests
-    DEPENDS
-        unit_tests_blackhole
-        unit_tests_wormhole
-        unit_tests_glx
-        test_pcie_device
-        api_tests
-        hang_detection_tests
-        baremetal_tests
-        umd_misc_tests
-        unified_tests
-        test_utils_tests
+set(UMD_TESTS_DEPENDS
+    unit_tests_blackhole
+    unit_tests_wormhole
+    unit_tests_glx
+    test_pcie_device
+    api_tests
+    hang_detection_tests
+    baremetal_tests
+    umd_misc_tests
+    unified_tests
 )
+if(NOT WIN32)
+    list(APPEND UMD_TESTS_DEPENDS test_utils_tests)
+endif()
+add_custom_target(umd_tests DEPENDS ${UMD_TESTS_DEPENDS})
