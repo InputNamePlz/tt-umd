@@ -1,7 +1,9 @@
-set(UNIFIED_TESTS_SRCS
-    multiprocess.cpp
-    test_tlb.cpp
-)
+set(UNIFIED_TESTS_SRCS test_tlb.cpp)
+
+if(NOT WIN32)
+    # Linux-only: multi-process device sharing via fork/waitpid and MultiProcessPipe.
+    list(APPEND UNIFIED_TESTS_SRCS multiprocess.cpp)
+endif()
 
 add_executable(unified_tests ${UNIFIED_TESTS_SRCS})
 target_link_libraries(unified_tests PRIVATE test_common)
