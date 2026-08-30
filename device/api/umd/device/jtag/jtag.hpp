@@ -4,7 +4,9 @@
 
 #pragma once
 
+#ifndef _WIN32
 #include <dlfcn.h>
+#endif
 
 #include <cstdint>
 #include <memory>
@@ -52,5 +54,10 @@ private:
     std::unordered_map<std::string, void*> func_map;
 
     void* load_function(const char* name);
+#ifdef _WIN32
+    // dlopen() flags are meaningless on Windows; JTAG library loading is not yet supported there.
+    void openLibrary(const std::string& filePath, int flags = 0);
+#else
     void openLibrary(const std::string& filePath, int flags = RTLD_LAZY);
+#endif
 };

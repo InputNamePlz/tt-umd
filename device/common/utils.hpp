@@ -5,7 +5,9 @@
 #pragma once
 
 #include <fmt/ranges.h>
+#ifndef _WIN32
 #include <unistd.h>
+#endif
 
 #include <chrono>
 #include <cstddef>
