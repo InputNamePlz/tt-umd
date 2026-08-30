@@ -47,12 +47,16 @@ namespace tt::umd::error {
  * @param skip Number of top stack frames to skip (default: 1, skipping this function itself).
  * @return Vector of demangled stack frame strings, empty if capture fails.
  */
+#ifdef _WIN32
+// Implemented in device/utils/stacktrace_windows.cpp: capturing needs dbghelp, whose header (and
+// windows.h) must not leak into this public header. Frames are symbolized when PDBs are available
+// and fall back to module-relative addresses otherwise.
+std::vector<std::string> capture_stacktrace_windows(uint32_t max_frames, uint32_t skip);
+#endif
+
 static inline std::vector<std::string> get_stacktrace(uint32_t max_frames = 64, uint32_t skip = 1) {
 #ifdef _WIN32
-    // Stack trace capture is not yet supported on Windows; exceptions carry file/line only.
-    (void)max_frames;
-    (void)skip;
-    return std::vector<std::string>{};
+    return capture_stacktrace_windows(max_frames, skip);
 #else
     if (skip >= max_frames) {
         return std::vector<std::string>{};
