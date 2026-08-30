@@ -64,6 +64,55 @@ int tt_windows_map_bar(
 int tt_windows_unmap_bar(tt_device_t* dev, void* va);
 
 /**
+ * @brief Description of the driver-owned host system memory (sysmem) buffer.
+ *
+ * tt-wind allocates one physically contiguous, cached host buffer at device
+ * start and exposes it to the chip through outbound iATU region 0 of the PCIe
+ * controller: NOC requests addressed to [noc_address, noc_address + total_size)
+ * on the PCIe tile land in the buffer.
+ */
+typedef struct tt_sysmem_info {
+    uint64_t total_size;     /**< Bytes of sysmem; 0 = sysmem unavailable (all other fields 0). */
+    uint64_t noc_address;    /**< NOC address of byte 0 as seen from any tile (Blackhole: 4 << 58). */
+    uint64_t device_io_addr; /**< Device-PCIe-space (iATU region base) address of byte 0. */
+    uint64_t channel_size;   /**< Bytes per channel; channel_count * channel_size == total_size. */
+    uint32_t channel_count;  /**< Number of channels the driver carved the buffer into. */
+    uint32_t max_map_bytes;  /**< Largest length a single tt_windows_map_sysmem() accepts. */
+    uint32_t pcie_tile_x;    /**< NOC0 x-coordinate of the active PCIe tile (y is 0). */
+} tt_sysmem_info_t;
+
+/**
+ * @brief Query the driver-owned sysmem buffer.
+ *
+ * Succeeds with out_info->total_size == 0 when sysmem is unavailable (the
+ * boot-time contiguous allocation or the iATU arming failed, or a reset is in
+ * flight); callers must treat that as "no sysmem", not as an error.
+ *
+ * @param dev Device handle
+ * @param out_info Filled on success; zeroed on failure
+ * @return 0 on success, negative error code on failure
+ */
+int tt_windows_query_sysmem(tt_device_t* dev, tt_sysmem_info_t* out_info);
+
+/**
+ * @brief Map a slice of the sysmem buffer into the calling process.
+ *
+ * The mapping is a single contiguous, cached, read/write view (the buffer is
+ * cached host RAM; PCIe DMA is cache-coherent on x64). Offset and length must
+ * be page aligned, length nonzero and at most tt_sysmem_info_t::max_map_bytes,
+ * and the range in bounds. Unmap with tt_windows_unmap_bar() (the driver's
+ * UNMAP_BAR path handles sysmem views too); mappings still live when the
+ * device handle closes are torn down automatically.
+ *
+ * @param dev Device handle
+ * @param offset Byte offset into the sysmem buffer; page aligned
+ * @param length Bytes to map; page aligned, nonzero
+ * @param out_va On success, base of the new mapping
+ * @return 0 on success, negative error code on failure
+ */
+int tt_windows_map_sysmem(tt_device_t* dev, uint64_t offset, uint64_t length, void** out_va);
+
+/**
  * @brief Configure a TLB window by its driver-assigned id.
  *
  * Driver-mediated equivalent of tt_tlb_map() for callers that track windows by
