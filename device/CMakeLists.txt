@@ -52,7 +52,21 @@ set_target_properties(
             ${CMAKE_PROJECT_VERSION_MAJOR}
 )
 
-# Enable unity builds for faster compilation 
+if(MSVC)
+    # UMD is C++17, but uses designated initializers, which GCC/Clang accept as a C++17 extension
+    # while MSVC only accepts them under /std:c++20.
+    set_target_properties(
+        tt-umd
+        PROPERTIES
+            CXX_STANDARD
+                20
+    )
+    # tt-logger's public logging macros use __VA_OPT__, which MSVC only supports with the
+    # conformant preprocessor. PUBLIC so that consumers of UMD's headers get it too.
+    target_compile_options(tt-umd PUBLIC /Zc:preprocessor)
+endif()
+
+# Enable unity builds for faster compilation
 # Note: Requires TT_ENABLE_UNITY_BUILD function from parent project 
 if(COMMAND TT_ENABLE_UNITY_BUILD)
     tt_enable_unity_build(tt-umd)
@@ -71,7 +85,6 @@ target_sources(
         $<$<BOOL:${TT_UMD_BUILD_EMULE}>:chip/sw_emule_chip.cpp>
         chip_helpers/sysmem_manager.cpp
         chip_helpers/simulation_sysmem_manager.cpp
-        chip_helpers/silicon_sysmem_manager.cpp
         chip_helpers/sysmem_buffer.cpp
         chip_helpers/tlb_manager.cpp
         pcie/tlb_window.cpp
@@ -84,13 +97,10 @@ target_sources(
         tt_device_model/simulation_tt_device_model.cpp
         tt_device/ethernet_broadcast.cpp
         coordinates/coordinate_manager.cpp
-        cpuset_lib.cpp
         arch/wormhole_implementation.cpp
         arch/blackhole_implementation.cpp
         arch/grendel_implementation.cpp
-        hugepage.cpp
         logging/config.cpp
-        pcie/pci_device.cpp
         types/tlb.cpp
         cluster_descriptor.cpp
         tt_device/blackhole_tt_device.cpp
@@ -128,11 +138,9 @@ target_sources(
         arc/blackhole_arc_message_queue.cpp
         arc/spi_tt_device.cpp
         noc_access.cpp
-        warm_reset.cpp
         warm_reset_with_recovery.cpp
         types/xy_pair.cpp
         utils/lock_manager.cpp
-        utils/robust_mutex.cpp
         utils/kmd_mutex.cpp
         topology/topology_discovery.cpp
         topology/topology_discovery_blackhole.cpp
@@ -144,15 +152,41 @@ target_sources(
         jtag/jtag.cpp
         arc/wormhole_spi_tt_device.cpp
         arc/blackhole_spi_tt_device.cpp
-        # UNIX domain socket (asio, already a core dependency) + filesystem; no simulation deps,
-        # so always built. This lets its unit tests run in the no-card baremetal CI lane
-        # (TT_UMD_BUILD_SIMULATION=OFF).
-        simulation/simulation_server_socket.cpp
-        simulation/simulation_client.cpp
-        # Length-prefixed message framing over the socket (uses asio, a core dependency; no
-        # FlatBuffers), so it is always built and unit-tested in the same no-card baremetal lane.
-        simulation/simulation_server_transport.cpp
 )
+
+if(NOT WIN32)
+    # Linux-only sources: they depend on POSIX facilities (mmap/hugepages, sysfs, /dev chardevs,
+    # robust pthread mutexes, dlopen, hwloc, Unix domain sockets). On Windows the ones whose
+    # symbols are needed elsewhere are replaced by *_windows.cpp stubs that throw
+    # "not yet supported on Windows".
+    target_sources(
+        tt-umd
+        PRIVATE
+            cpuset_lib.cpp
+            hugepage.cpp
+            chip_helpers/silicon_sysmem_manager.cpp
+            pcie/pci_device.cpp
+            utils/robust_mutex.cpp
+            warm_reset.cpp
+            # UNIX domain socket (asio, already a core dependency) + filesystem; no simulation deps,
+            # so always built. This lets its unit tests run in the no-card baremetal CI lane
+            # (TT_UMD_BUILD_SIMULATION=OFF).
+            simulation/simulation_server_socket.cpp
+            simulation/simulation_client.cpp
+            # Length-prefixed message framing over the socket (uses asio, a core dependency; no
+            # FlatBuffers), so it is always built and unit-tested in the same no-card baremetal lane.
+            simulation/simulation_server_transport.cpp
+    )
+else()
+    target_sources(
+        tt-umd
+        PRIVATE
+            chip_helpers/silicon_sysmem_manager_windows.cpp
+            pcie/pci_device_windows.cpp
+            utils/robust_mutex_windows.cpp
+            warm_reset_windows.cpp
+    )
+endif()
 
 if(TT_UMD_BUILD_SIMULATION)
     target_sources(
