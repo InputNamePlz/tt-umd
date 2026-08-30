@@ -5,7 +5,9 @@
 #include "umd/device/chip_helpers/sysmem_buffer.hpp"
 
 #include <fmt/format.h>
+#ifndef _WIN32
 #include <unistd.h>
+#endif
 
 #include <cstddef>
 #include <cstdint>
@@ -49,7 +51,12 @@ SysmemBuffer::Deleter make_non_throwing(SysmemBuffer::Deleter deleter) {
 }  // namespace
 
 SysmemBuffer::AlignedRange SysmemBuffer::page_align(void* buffer_va, size_t buffer_size) {
+#ifdef _WIN32
+    // Fixed 4KiB assumption; sysmem buffers are not yet supported on Windows anyway.
+    static const int64_t page_size = 4096;
+#else
     static const auto page_size = sysconf(_SC_PAGESIZE);
+#endif
     const uint64_t va = reinterpret_cast<uint64_t>(buffer_va);
     const uint64_t base = va & ~(page_size - 1);
     AlignedRange range{};
