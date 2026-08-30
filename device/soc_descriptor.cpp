@@ -15,9 +15,11 @@
 #include <fstream>
 #include <initializer_list>
 #include <optional>
+#include <random>
 #include <set>
 #include <stdexcept>
 #include <string>
+#include <system_error>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -423,8 +425,20 @@ std::filesystem::path SocDescriptor::serialize_to_file(const std::filesystem::pa
 
 std::filesystem::path SocDescriptor::get_default_soc_descriptor_file_path() {
 #ifdef _WIN32
-    // mkdtemp() does not exist on Windows; a unique temp directory scheme is not implemented yet.
-    UMD_THROW(error::RuntimeError, "SocDescriptor::get_default_soc_descriptor_file_path is not yet supported on Windows.");
+    // mkdtemp() does not exist on Windows; generate a random directory name and create it instead,
+    // retrying on the unlikely collision. create_directory returning true means we made it, so the
+    // name was unique.
+    std::filesystem::path temp_path = std::filesystem::temp_directory_path();
+    std::random_device rd;
+    for (int attempt = 0; attempt < 100; ++attempt) {
+        const uint64_t nonce = (static_cast<uint64_t>(rd()) << 32) ^ rd();
+        std::filesystem::path soc_path_dir = temp_path / fmt::format("umd_{:016x}", nonce);
+        std::error_code ec;
+        if (std::filesystem::create_directory(soc_path_dir, ec)) {
+            return soc_path_dir / "soc_descriptor.yaml";
+        }
+    }
+    UMD_THROW(error::RuntimeError, "Failed to create a unique temp directory for the SOC descriptor.");
 #else
     std::filesystem::path temp_path = std::filesystem::temp_directory_path();
     std::string soc_path_dir_template = temp_path / "umd_XXXXXX";
