@@ -40,9 +40,16 @@ using namespace tt;
 using namespace tt::umd;
 
 bool is_kmd_version_good() {
+#ifdef _WIN32
+    // The version gate tracks the Linux tt-kmd ioctl API history. The Windows driver stack does not
+    // report a comparable version (read_kmd_version() is 0.0.0 by design) but implements the TLB
+    // allocation API these tests need, so the gate does not apply.
+    return true;
+#else
     SemVer kmd_ver = PCIDevice::read_kmd_version();
 
     return kmd_ver.major > 1 || (kmd_ver.major == 1 && kmd_ver.minor >= 34);
+#endif
 }
 
 // Every TestTlb case drives a TLB window directly (raw SiliconTlbWindow / static TLB window), so the
