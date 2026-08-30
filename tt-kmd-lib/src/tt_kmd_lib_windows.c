@@ -44,9 +44,12 @@ struct tt_device_t {
     HANDLE handle;
 
     /* Resource locks (tt_lock_*): lazily created named mutexes plus this
-     * handle's recursive-hold count per slot; see the tt_lock_* section. */
+     * handle's hold count per slot and the slot's index (biased by one, so
+     * zero means unset) in the process-global lock registry; see the
+     * tt_lock_* section. */
     HANDLE lock_handles[TT_RESOURCE_LOCK_COUNT];
     unsigned lock_held_count[TT_RESOURCE_LOCK_COUNT];
+    unsigned lock_registry_slot_plus1[TT_RESOURCE_LOCK_COUNT];
 };
 
 struct tt_tlb_t {
@@ -54,6 +57,67 @@ struct tt_tlb_t {
     size_t size;
     void* mmio;
 };
+
+/* --- in-process lock registry ------------------------------------------- */
+
+/* Process-global registry of the named lock mutexes this process currently
+ * holds. Win32 mutexes are recursive per owning thread: once any handle in
+ * this process holds a slot's mutex, a second zero-timeout wait issued on the
+ * owning thread succeeds recursively instead of failing. The driver's locks
+ * are not recursive -- an acquire fails while the lock is held, even when the
+ * asking handle is the holder -- so in-process arbitration happens here, and
+ * only cross-process contention is left to the kernel mutex (which also
+ * provides crash recovery via WAIT_ABANDONED). See the tt_lock_* section. */
+#define LOCK_NAME_CHARS 128
+
+typedef struct lock_registry_entry {
+    wchar_t name[LOCK_NAME_CHARS];
+    int held; /* some handle in this process holds the named mutex */
+} lock_registry_entry;
+
+static INIT_ONCE g_lock_registry_once = INIT_ONCE_STATIC_INIT;
+static CRITICAL_SECTION g_lock_registry_cs;
+static lock_registry_entry* g_lock_registry = NULL;
+static size_t g_lock_registry_count = 0;
+static size_t g_lock_registry_cap = 0;
+
+static BOOL CALLBACK lock_registry_init_once(PINIT_ONCE once, PVOID param, PVOID* context) {
+    (void)once;
+    (void)param;
+    (void)context;
+    InitializeCriticalSection(&g_lock_registry_cs);
+    return TRUE;
+}
+
+static void lock_registry_enter(void) {
+    InitOnceExecuteOnce(&g_lock_registry_once, lock_registry_init_once, NULL, NULL);
+    EnterCriticalSection(&g_lock_registry_cs);
+}
+
+static void lock_registry_leave(void) { LeaveCriticalSection(&g_lock_registry_cs); }
+
+/* Caller must hold the registry critical section. Returns the entry index for
+ * name, adding the entry if it is new, or -1 on allocation failure. */
+static int lock_registry_find_or_add(const wchar_t* name) {
+    for (size_t i = 0; i < g_lock_registry_count; i++) {
+        if (wcscmp(g_lock_registry[i].name, name) == 0) {
+            return (int)i;
+        }
+    }
+    if (g_lock_registry_count == g_lock_registry_cap) {
+        size_t new_cap = g_lock_registry_cap ? g_lock_registry_cap * 2 : 16;
+        lock_registry_entry* grown = (lock_registry_entry*)realloc(g_lock_registry, new_cap * sizeof(*grown));
+        if (grown == NULL) {
+            return -1;
+        }
+        g_lock_registry = grown;
+        g_lock_registry_cap = new_cap;
+    }
+    lock_registry_entry* entry = &g_lock_registry[g_lock_registry_count];
+    wcscpy_s(entry->name, LOCK_NAME_CHARS, name);
+    entry->held = 0;
+    return (int)(g_lock_registry_count++);
+}
 
 /* --- error translation ------------------------------------------------- */
 
@@ -307,8 +371,15 @@ int tt_device_close(tt_device_t* dev) {
      * the mutex is recovered as abandoned when the owning thread exits. */
     for (unsigned i = 0; i < TT_RESOURCE_LOCK_COUNT; i++) {
         if (dev->lock_handles[i] != NULL) {
-            while (dev->lock_held_count[i] > 0 && ReleaseMutex(dev->lock_handles[i])) {
-                dev->lock_held_count[i]--;
+            if (dev->lock_held_count[i] > 0) {
+                lock_registry_enter();
+                while (dev->lock_held_count[i] > 0 && ReleaseMutex(dev->lock_handles[i])) {
+                    dev->lock_held_count[i]--;
+                }
+                if (dev->lock_held_count[i] == 0) {
+                    g_lock_registry[dev->lock_registry_slot_plus1[i] - 1].held = 0;
+                }
+                lock_registry_leave();
             }
             CloseHandle(dev->lock_handles[i]);
         }
@@ -1074,10 +1145,11 @@ int tt_device_reset(tt_device_t* dev, uint32_t reset_flags) {
  *    same policy as RobustMutex.
  *
  * Caveat vs the Linux driver locks: Win32 mutex ownership is per-THREAD, not
- * per device handle. Acquire and release must happen on the same thread, and
- * acquiring a slot twice through two tt_device_t handles on one thread
- * succeeds recursively instead of failing. The per-handle hold count below
- * keeps release/test bookkeeping right for the supported (same-thread) use. */
+ * per device handle, and is recursive on the owning thread. Release (and a
+ * close that still holds locks) must happen on the acquiring thread; if it
+ * does not, the lock stays held until the owning thread exits. Acquire
+ * semantics are made non-recursive by the in-process lock registry (defined
+ * near the top of this file, since tt_device_close also consults it). */
 
 static int lock_get_mutex(tt_device_t* dev, uint8_t index, HANDLE* out_mutex) {
     if (dev->lock_handles[index] == NULL) {
@@ -1087,7 +1159,7 @@ static int lock_get_mutex(tt_device_t* dev, uint8_t index, HANDLE* out_mutex) {
             return err;
         }
 
-        wchar_t name[128];
+        wchar_t name[LOCK_NAME_CHARS];
         swprintf(
             name,
             ARRAYSIZE(name),
@@ -1098,11 +1170,19 @@ static int lock_get_mutex(tt_device_t* dev, uint8_t index, HANDLE* out_mutex) {
             info.Function,
             (unsigned)index);
 
+        lock_registry_enter();
+        int slot = lock_registry_find_or_add(name);
+        lock_registry_leave();
+        if (slot < 0) {
+            return -ENOMEM;
+        }
+
         HANDLE h = CreateMutexW(NULL, FALSE, name);
         if (h == NULL) {
             return last_err();
         }
         dev->lock_handles[index] = h;
+        dev->lock_registry_slot_plus1[index] = (unsigned)slot + 1;
     }
     *out_mutex = dev->lock_handles[index];
     return 0;
@@ -1122,16 +1202,33 @@ int tt_lock_acquire(tt_device_t* dev, uint8_t index, int* out_acquired) {
         return err;
     }
 
+    /* The registry check makes the acquire non-recursive: while any handle in
+     * this process holds the slot, every further acquire fails, including one
+     * from the holding handle -- which a bare zero-timeout wait on the owning
+     * thread would wrongly grant. The wait itself stays inside the critical
+     * section so the held flag and the mutex cannot go out of step. */
+    lock_registry_enter();
+    lock_registry_entry* entry = &g_lock_registry[dev->lock_registry_slot_plus1[index] - 1];
+    if (entry->held) {
+        lock_registry_leave();
+        *out_acquired = 0;
+        return 0;
+    }
+
     switch (WaitForSingleObject(mutex, 0)) {
         case WAIT_OBJECT_0:
         case WAIT_ABANDONED: /* previous owner died; lock recovered */
+            entry->held = 1;
             dev->lock_held_count[index]++;
+            lock_registry_leave();
             *out_acquired = 1;
             return 0;
         case WAIT_TIMEOUT:
+            lock_registry_leave();
             *out_acquired = 0;
             return 0;
         default:
+            lock_registry_leave();
             return last_err();
     }
 }
@@ -1149,13 +1246,19 @@ int tt_lock_release(tt_device_t* dev, uint8_t index, int* out_was_held) {
         return 0;
     }
 
+    lock_registry_enter();
     if (!ReleaseMutex(dev->lock_handles[index])) {
+        lock_registry_leave();
         /* ERROR_NOT_OWNER: held, but not by the calling thread (see the
          * thread-affinity caveat above). */
         return (GetLastError() == ERROR_NOT_OWNER) ? -EPERM : last_err();
     }
 
     dev->lock_held_count[index]--;
+    if (dev->lock_held_count[index] == 0) {
+        g_lock_registry[dev->lock_registry_slot_plus1[index] - 1].held = 0;
+    }
+    lock_registry_leave();
     if (out_was_held != NULL) {
         *out_was_held = 1;
     }
@@ -1181,18 +1284,33 @@ int tt_lock_test(tt_device_t* dev, uint8_t index, uint32_t* out_state) {
         return err;
     }
 
-    /* Probe with a zero-timeout acquire; on success nobody held it, so undo
-     * the probe immediately. Inherently racy, like the driver's test. */
+    /* A holder inside this process is visible in the registry; the probe
+     * below would wrongly succeed for it on the owning thread (recursive
+     * mutex), so answer from the registry first. */
+    lock_registry_enter();
+    if (g_lock_registry[dev->lock_registry_slot_plus1[index] - 1].held) {
+        lock_registry_leave();
+        *out_state = TT_LOCK_STATE_HELD_BY_ANY;
+        return 0;
+    }
+
+    /* No handle in this process holds the slot (and none can take it while
+     * the critical section is held), so probe with a zero-timeout acquire; on
+     * success nobody held it, so undo the probe immediately. Inherently racy
+     * against other processes, like the driver's test. */
     switch (WaitForSingleObject(mutex, 0)) {
         case WAIT_OBJECT_0:
         case WAIT_ABANDONED:
             ReleaseMutex(mutex);
+            lock_registry_leave();
             *out_state = 0;
             return 0;
         case WAIT_TIMEOUT:
+            lock_registry_leave();
             *out_state = TT_LOCK_STATE_HELD_BY_ANY;
             return 0;
         default:
+            lock_registry_leave();
             return last_err();
     }
 }
