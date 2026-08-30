@@ -5,7 +5,9 @@
 #include "umd/device/chip_helpers/sysmem_buffer.hpp"
 
 #include <fmt/format.h>
+#ifndef _WIN32
 #include <unistd.h>
+#endif
 
 #include <cstddef>
 #include <cstdint>
@@ -111,7 +113,12 @@ SysmemBuffer::~SysmemBuffer() {
 }
 
 void SysmemBuffer::align_address_and_size() {
+#ifdef _WIN32
+    // Fixed 4KiB assumption; sysmem buffers are not yet supported on Windows anyway.
+    static const int64_t page_size = 4096;
+#else
     static const auto page_size = sysconf(_SC_PAGESIZE);
+#endif
     uint64_t aligned_buffer_va = reinterpret_cast<uint64_t>(buffer_va_) & ~(page_size - 1);
     offset_from_aligned_addr_ = reinterpret_cast<uint64_t>(buffer_va_) - aligned_buffer_va;
     buffer_va_ = reinterpret_cast<void*>(aligned_buffer_va);

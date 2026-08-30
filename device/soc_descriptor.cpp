@@ -422,12 +422,17 @@ std::filesystem::path SocDescriptor::serialize_to_file(const std::filesystem::pa
 }
 
 std::filesystem::path SocDescriptor::get_default_soc_descriptor_file_path() {
+#ifdef _WIN32
+    // mkdtemp() does not exist on Windows; a unique temp directory scheme is not implemented yet.
+    UMD_THROW(error::RuntimeError, "SocDescriptor::get_default_soc_descriptor_file_path is not yet supported on Windows.");
+#else
     std::filesystem::path temp_path = std::filesystem::temp_directory_path();
     std::string soc_path_dir_template = temp_path / "umd_XXXXXX";
     std::filesystem::path soc_path_dir = mkdtemp(soc_path_dir_template.data());
     std::filesystem::path soc_path = soc_path_dir / "soc_descriptor.yaml";
 
     return soc_path;
+#endif
 }
 
 std::vector<CoreCoord> SocDescriptor::translate_coordinates(

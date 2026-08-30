@@ -4,7 +4,9 @@
 
 #include "umd/device/pcie/silicon_tlb_window.hpp"
 
+#ifndef _WIN32
 #include <unistd.h>
+#endif
 
 #include <algorithm>
 #include <atomic>
@@ -26,6 +28,7 @@
 
 namespace tt::umd {
 
+#ifndef _WIN32
 static thread_local sigjmp_buf point __attribute__((tls_model("initial-exec")));
 static thread_local volatile sig_atomic_t jump_set __attribute__((tls_model("initial-exec"))) = 0;
 
@@ -65,6 +68,11 @@ struct ScopedJumpGuard {
     }
     signal(SIGBUS, SIG_DFL);
 }
+#else
+/* static */ void SiliconTlbWindow::set_sigbus_safe_handler(bool /*set_safe_handler*/) {
+    // SIGBUS does not exist on Windows; device-access faults are not intercepted yet.
+}
+#endif  // _WIN32
 
 SiliconTlbWindow::SiliconTlbWindow(std::unique_ptr<TlbHandle> handle, const tlb_data config) :
     TlbWindow(std::move(handle), config) {
@@ -277,6 +285,10 @@ void SiliconTlbWindow::read_regs(
 
 template <typename Func, typename... Args>
 decltype(auto) SiliconTlbWindow::execute_safe(Func &&func, Args &&...args) {
+#ifdef _WIN32
+    // No SIGBUS on Windows; invoke directly without a recovery point.
+    return std::invoke(std::forward<Func>(func), this, std::forward<Args>(args)...);
+#else
     if (sigsetjmp(point, 1) == 0) {
         ScopedJumpGuard guard;
         return std::invoke(std::forward<Func>(func), this, std::forward<Args>(args)...);
@@ -285,6 +297,7 @@ decltype(auto) SiliconTlbWindow::execute_safe(Func &&func, Args &&...args) {
         jump_set = 0;
         throw error::SigbusError("SIGBUS signal detected: Device access failed.");
     }
+#endif  // _WIN32
 }
 
 void SiliconTlbWindow::safe_write16(uint64_t offset, uint16_t value) {

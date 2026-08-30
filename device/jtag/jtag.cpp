@@ -21,10 +21,12 @@ using namespace tt::umd;
 /*static*/ DlHandle Jtag::handle;
 
 void DlCloser::operator()(void* handle) const {
+#ifndef _WIN32
     if (handle != nullptr) {
         dlclose(handle);
         log_debug(tt::LogUMD, "JTAG library closed");
     }
+#endif
 }
 
 void Jtag::openLibrary(const std::string& filePath, int flags) {
@@ -40,6 +42,9 @@ void Jtag::openLibrary(const std::string& filePath, int flags) {
         return;
     }
 
+#ifdef _WIN32
+    UMD_THROW(error::RuntimeError, "Loading a JTAG library is not yet supported on Windows.");
+#else
     handle = DlHandle(dlopen(filePath.c_str(), flags));
 
     if (!handle) {
@@ -47,12 +52,16 @@ void Jtag::openLibrary(const std::string& filePath, int flags) {
     }
 
     log_info(tt::LogUMD, "JTAG library {} opened successfully.", filePath);
+#endif
 }
 
 Jtag::Jtag(const char* lib_path) { openLibrary(lib_path); }
 
 void* Jtag::load_function(const char* name) {
     if (func_map.find(name) == func_map.end()) {
+#ifdef _WIN32
+        UMD_THROW(error::RuntimeError, "Loading a JTAG library is not yet supported on Windows.");
+#else
         void* funcPtr = dlsym(handle.get(), name);
         const char* dlsym_error = dlerror();
         if (dlsym_error) {
@@ -60,6 +69,7 @@ void* Jtag::load_function(const char* name) {
             UMD_THROW(error::RuntimeError, fmt::format("Failed to load function {}. dlerror: {}", name, dlsym_error));
         }
         func_map[name] = funcPtr;
+#endif
     }
     return func_map[name];
 }

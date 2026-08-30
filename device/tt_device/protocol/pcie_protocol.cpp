@@ -7,7 +7,9 @@
 #include "umd/device/tt_device/protocol/pcie_protocol.hpp"
 
 #include <fmt/format.h>
+#ifndef _WIN32
 #include <unistd.h>
+#endif
 
 #include <algorithm>
 #include <cstring>
@@ -199,7 +201,12 @@ int PcieProtocol::export_dmabuf(tt_xy_pair core, uint64_t addr, size_t size, uin
         error::RuntimeError,
         "Invalid ordering specified in PcieProtocol::export_dmabuf");
 
+#ifdef _WIN32
+    // Fixed 4KiB assumption; dma-buf export is not yet supported on Windows anyway.
+    const uint64_t page_size = 4096;
+#else
     const uint64_t page_size = static_cast<uint64_t>(getpagesize());
+#endif
     UMD_ASSERT(size != 0, error::RuntimeError, "Cannot export a dma-buf of size 0.");
     UMD_ASSERT(
         addr % page_size == 0,

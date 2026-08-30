@@ -5,7 +5,13 @@
 #include "umd/device/tt_device/blackhole_tt_device.hpp"
 
 #include <fmt/format.h>
+#ifndef _WIN32
 #include <sys/mman.h>  // for MAP_FAILED
+#else
+// mmap() does not exist on Windows; bar2_uc is only ever nullptr or a valid mapping there, so the
+// sentinel is defined for the comparisons below to compile.
+#define MAP_FAILED ((void *)-1)
+#endif
 
 #include <chrono>
 #include <memory>

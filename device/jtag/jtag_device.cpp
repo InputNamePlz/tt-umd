@@ -5,8 +5,10 @@
 #include "umd/device/jtag/jtag_device.hpp"
 
 #include <fmt/format.h>
+#ifndef _WIN32
 #include <sys/types.h>
 #include <unistd.h>
+#endif
 
 #include <algorithm>
 #include <climits>
@@ -71,6 +73,7 @@ JtagDevice::JtagDevice(std::unique_ptr<Jtag> jtag_device, const std::unordered_s
     const std::filesystem::path& binary_directory, const std::unordered_set<int>& jtag_target_devices) {
     std::filesystem::path actual_path = binary_directory;
 
+#ifndef _WIN32
     if (actual_path.empty()) {
         char buffer[PATH_MAX + 1];
         ssize_t len = readlink("/proc/self/exe", buffer, sizeof(buffer) - 1);
@@ -82,8 +85,9 @@ JtagDevice::JtagDevice(std::unique_ptr<Jtag> jtag_device, const std::unordered_s
             actual_path = path.substr(0, pos);
         }
     }
+#endif
 
-    std::unique_ptr<Jtag> jtag = std::make_unique<Jtag>(actual_path.c_str());
+    std::unique_ptr<Jtag> jtag = std::make_unique<Jtag>(actual_path.string().c_str());
     std::unique_ptr<JtagDevice> jtag_device = std::make_unique<JtagDevice>(std::move(jtag), jtag_target_devices);
 
     // Check that all chips are of the same type.
