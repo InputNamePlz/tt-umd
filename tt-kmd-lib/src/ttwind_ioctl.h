@@ -56,6 +56,12 @@ DEFINE_GUID(GUID_DEVINTERFACE_TTWIND,
     CTL_CODE(TTWIND_DEVICE_TYPE, 0x805, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #define IOCTL_TTWIND_MAP_TLB \
     CTL_CODE(TTWIND_DEVICE_TYPE, 0x806, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_TTWIND_SMC_MSG \
+    CTL_CODE(TTWIND_DEVICE_TYPE, 0x807, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_TTWIND_RESET_DEVICE \
+    CTL_CODE(TTWIND_DEVICE_TYPE, 0x808, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_TTWIND_ARC_STATUS \
+    CTL_CODE(TTWIND_DEVICE_TYPE, 0x809, METHOD_BUFFERED, FILE_ANY_ACCESS)
 
 /* A PCI device decodes at most six 32-bit BARs. */
 #define TTWIND_MAX_BARS 6u
@@ -228,6 +234,108 @@ typedef struct _TTWIND_MAP_TLB_OUT {
     unsigned __int64 UserVa;
 } TTWIND_MAP_TLB_OUT;
 
+/* --- ARC (SMC) firmware messaging / reset ---------------------------- */
+
+/*
+ * Input and output of IOCTL_TTWIND_SMC_MSG.
+ *
+ * One synchronous 8x32-bit message exchange with the ARC (SMC) firmware,
+ * the same wire format as tt-kmd's TENSTORRENT_IOCTL_SMC_MSG (msgqueue.c
+ * `struct arc_msg`): Message[0] is the header (message type in the low
+ * byte; type-specific fields above it), Message[1..7] the payload. The
+ * response overwrites all eight words.
+ *
+ * Unlike the Linux POST/POLL/ABANDON interface this call blocks (bounded
+ * by the driver's internal ~1.5 s timeout) and returns the response
+ * directly; the driver's sequential IOCTL queue serializes concurrent
+ * callers. The driver does NOT interpret the firmware status in the
+ * response Message[0]; a response with a nonzero status still completes
+ * successfully. Errors:
+ *   STATUS_NOT_SUPPORTED         no usable message queue (old firmware)
+ *   STATUS_IO_TIMEOUT            firmware never produced a response
+ *   STATUS_DEVICE_DOES_NOT_EXIST all-1s reads; device is gone/hung
+ *   STATUS_DEVICE_NOT_READY      device not started / firmware not ready
+ */
+typedef struct _TTWIND_SMC_MSG_INOUT {
+    unsigned int Message[8];
+} TTWIND_SMC_MSG_INOUT;
+
+/*
+ * Input of IOCTL_TTWIND_RESET_DEVICE. No output buffer.
+ *
+ * v1 is conservative: the reset is refused with STATUS_DEVICE_BUSY while
+ * ANY user mapping of device memory exists on any handle (the driver has
+ * no way to revoke user page-table entries yet, and a dangling user view
+ * of a BAR across a reset is unacceptable). Unmap everything first.
+ *
+ * The reset itself is tt-kmd's Blackhole "ASIC reset" mechanism: a write
+ * to the device's own config space (DBI interface timer) that makes the
+ * chip reset itself; the driver saves/restores config space around it
+ * and re-sends the power-up firmware messages afterwards. The PCIe link
+ * and the parent bridge are never touched.
+ *
+ * Flags and Reserved must be 0.
+ */
+typedef struct _TTWIND_RESET_DEVICE_IN {
+    unsigned int Flags;          /* must be 0 */
+    unsigned int Reserved;       /* must be 0 */
+} TTWIND_RESET_DEVICE_IN;
+
+/*
+ * Output of IOCTL_TTWIND_ARC_STATUS. No input buffer.
+ *
+ * Diagnostic: performs one live, bounded ARC message-queue discovery
+ * probe and reports what it observed. Read-only on the device (NOC
+ * reads of the ARC tile only); always completes with STATUS_SUCCESS
+ * when the device is started - the outcome is in the payload.
+ *
+ * The ARC APB block (reset-unit scratch registers and the doorbell) is
+ * probed through three candidate routes on tile (8,0):
+ *   1. NOC, low alias: NOC address = 0x80000000 + APB offset (what
+ *      tt-kmd uses; boot status at 0x80030408),
+ *   2. NOC, high window: NOC address = 0x8_80000000 + APB offset
+ *      (Wormhole's ARC-over-NOC addressing),
+ *   3. BAR0 AXI aperture: BAR0 offset 0x1FF00000 + APB offset (what
+ *      tt-umd's read_from_arc_apb uses over PCIe when available).
+ * The CSM (message ring memory) is always accessed via the NOC low
+ * alias (NOC address = CSM address, 0x100xxxxx), which is what tt-kmd
+ * does and is verified to decode on this hardware.
+ *
+ * @Stage: TTWIND_ARC_STAGE_*.
+ * @LastStatus: NTSTATUS of the probe (0 on full success).
+ * @BootStatusLow / @BootStatusHigh / @BootStatusAxi: raw single reads
+ *      of SCRATCH_RAM_2 (boot status) through routes 1 / 2 / 3.
+ *      BootStatusAxi is 0xFFFFFFFF when the aperture is unmapped
+ *      (BAR0 too small).
+ * @Route: TTWIND_ARC_ROUTE_* the driver selected for APB access.
+ * @QcbPtr: raw SCRATCH_RAM_11 (queue control block pointer) read
+ *      through the selected route; 0 if none selected.
+ * @QueueBase / @NumEntries: decoded firmware queue, when Stage is
+ *      TTWIND_ARC_STAGE_QUEUE_OK.
+ */
+#define TTWIND_ARC_STAGE_NOT_STARTED   0u /* device/hw not ready       */
+#define TTWIND_ARC_STAGE_NO_BOOT_READY 1u /* no route showed ready     */
+#define TTWIND_ARC_STAGE_BAD_QUEUE     2u /* ready, but QCB/queue bad  */
+#define TTWIND_ARC_STAGE_QUEUE_OK      3u /* queue located             */
+
+#define TTWIND_ARC_ROUTE_NONE     0u
+#define TTWIND_ARC_ROUTE_NOC_LOW  1u /* NOC 0x80000000 + APB offset    */
+#define TTWIND_ARC_ROUTE_NOC_HIGH 2u /* NOC 0x8_80000000 + APB offset  */
+#define TTWIND_ARC_ROUTE_AXI      3u /* BAR0 0x1FF00000 + APB offset   */
+
+typedef struct _TTWIND_ARC_STATUS_OUT {
+    unsigned int Stage;
+    unsigned int LastStatus;     /* NTSTATUS of the probe              */
+    unsigned int BootStatusLow;  /* SCRATCH_RAM_2 via NOC low alias    */
+    unsigned int BootStatusHigh; /* SCRATCH_RAM_2 via NOC high window  */
+    unsigned int BootStatusAxi;  /* SCRATCH_RAM_2 via BAR0 aperture    */
+    unsigned int Route;          /* TTWIND_ARC_ROUTE_* selected        */
+    unsigned int QcbPtr;         /* SCRATCH_RAM_11 via selection       */
+    unsigned int QueueBase;
+    unsigned int NumEntries;
+    unsigned int Reserved;       /* zero */
+} TTWIND_ARC_STATUS_OUT;
+
 #ifdef __cplusplus
 static_assert(sizeof(TTWIND_DEVICE_INFO_OUT) == 120,
               "TTWIND_DEVICE_INFO_OUT wire size changed");
@@ -241,6 +349,9 @@ static_assert(sizeof(TTWIND_NOC_TLB_CONFIG) == 32, "wire size");
 static_assert(sizeof(TTWIND_CONFIGURE_TLB_IN) == 40, "wire size");
 static_assert(sizeof(TTWIND_MAP_TLB_IN) == 8, "wire size");
 static_assert(sizeof(TTWIND_MAP_TLB_OUT) == 8, "wire size");
+static_assert(sizeof(TTWIND_SMC_MSG_INOUT) == 32, "wire size");
+static_assert(sizeof(TTWIND_RESET_DEVICE_IN) == 8, "wire size");
+static_assert(sizeof(TTWIND_ARC_STATUS_OUT) == 40, "wire size");
 #else
 C_ASSERT(sizeof(TTWIND_DEVICE_INFO_OUT) == 120);
 C_ASSERT(sizeof(TTWIND_MAP_BAR_IN) == 24);
@@ -253,4 +364,7 @@ C_ASSERT(sizeof(TTWIND_NOC_TLB_CONFIG) == 32);
 C_ASSERT(sizeof(TTWIND_CONFIGURE_TLB_IN) == 40);
 C_ASSERT(sizeof(TTWIND_MAP_TLB_IN) == 8);
 C_ASSERT(sizeof(TTWIND_MAP_TLB_OUT) == 8);
+C_ASSERT(sizeof(TTWIND_SMC_MSG_INOUT) == 32);
+C_ASSERT(sizeof(TTWIND_RESET_DEVICE_IN) == 8);
+C_ASSERT(sizeof(TTWIND_ARC_STATUS_OUT) == 40);
 #endif
