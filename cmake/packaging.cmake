@@ -22,7 +22,11 @@ install(
     COMPONENT umd-dev
 )
 
-set(CPACK_GENERATOR "DEB;RPM")
+if(WIN32)
+    set(CPACK_GENERATOR "ZIP")
+else()
+    set(CPACK_GENERATOR "DEB;RPM")
+endif()
 set(CPACK_PACKAGE_VENDOR "Tenstorrent, Inc.")
 set(CPACK_PACKAGE_NAME "tt_umd")
 # Use full version from VERSION file (e.g. 0.9.3-rc1) for package version; PROJECT_VERSION is numeric-only for CMake
