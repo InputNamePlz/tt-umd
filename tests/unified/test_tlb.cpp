@@ -2,9 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <fcntl.h>
 #include <gtest/gtest.h>
+#ifndef _WIN32
+#include <fcntl.h>
 #include <unistd.h>
+#endif
 
 #include <algorithm>
 #include <cstddef>
@@ -102,6 +104,9 @@ TEST_F(TestTlb, TestTlbWindowAllocateNew) {
     }
 }
 
+#ifndef _WIN32
+// Linux-only: dmabuf export is a Linux KMD feature, and the checks below use fcntl/close on the
+// returned file descriptor.
 TEST_F(TestTlb, TestClusterExportDmabuf) {
     if (PCIDevice::read_kmd_version() < KMD_TLB_DMABUF_EXPORT) {
         GTEST_SKIP() << "KMD version " << PCIDevice::read_kmd_version().str() << " is below required "
@@ -140,6 +145,7 @@ TEST_F(TestTlb, TestClusterExportDmabuf) {
     EXPECT_THROW(cluster->export_dmabuf(chip, core, 1, page_size), std::runtime_error);
     EXPECT_THROW(cluster->export_dmabuf(chip, core, 0, page_size + 1), std::runtime_error);
 }
+#endif  // !_WIN32
 
 TEST_F(TestTlb, TestTlbWindowReuse) {
     if (!is_kmd_version_good()) {
