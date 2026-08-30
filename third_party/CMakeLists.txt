@@ -35,6 +35,22 @@ if(TT_UMD_BUILD_TESTS)
     if(GTest_ADDED AND NOT MSVC)
         target_compile_options(gtest PRIVATE -Wno-implicit-int-float-conversion)
     endif()
+    if(GTest_ADDED AND MSVC)
+        # FetchContent lowercases "GTest" to "gtest", which shadows the googletest project's
+        # own gtest_SOURCE_DIR with the distribution root inside googlemock's scope. On MSVC
+        # gmock compiles gtest-all.cc directly and relies on those directory-level includes,
+        # so point the targets back at the real googletest tree.
+        foreach(tgt gmock gmock_main)
+            if(TARGET ${tgt})
+                target_include_directories(
+                    ${tgt}
+                    PRIVATE
+                        "${GTest_SOURCE_DIR}/googletest/include"
+                        "${GTest_SOURCE_DIR}/googletest"
+                )
+            endif()
+        endforeach()
+    endif()
 endif()
 
 ####################################################################################################################
