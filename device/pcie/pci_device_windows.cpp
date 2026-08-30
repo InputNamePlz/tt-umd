@@ -22,12 +22,15 @@
 #include <fmt/format.h>
 
 #include <algorithm>
+#include <cstdlib>
 #include <cstring>
 #include <map>
+#include <set>
 #include <string>
 #include <tt-logger/tt-logger.hpp>
 #include <vector>
 
+#include "common/utils.hpp"
 #include "tt-kmd-lib/pci_ids.h"
 #include "tt-kmd-lib/tt_kmd_lib.h"
 #include "tt-kmd-lib/tt_kmd_lib_windows.h"
@@ -72,7 +75,75 @@ std::vector<int> PCIDevice::get_all_device_ids() {
     return device_ids;
 }
 
-std::vector<int> PCIDevice::enumerate_devices() { return get_all_device_ids(); }
+// Mirrors the Linux enumerate_devices(): honor TT_VISIBLE_DEVICES by logical id or BDF pattern.
+// Ordinals are already BDF-stable (sorted interface-path order), so no extra sort is needed.
+std::vector<int> PCIDevice::enumerate_devices() {
+    const char *tt_visible_devices_env = std::getenv("TT_VISIBLE_DEVICES");
+    if (!tt_visible_devices_env) {
+        return get_all_device_ids();
+    }
+
+    std::string tt_visible_devices_str(tt_visible_devices_env);
+    if (tt_visible_devices_str.empty()) {
+        return {};
+    }
+
+    std::vector<std::string> device_tokens = utils::split_string_by_comma(tt_visible_devices_str);
+
+    std::map<std::string, int> bdf_to_device_id_map = get_bdf_to_device_id_map();
+    std::vector<int> all_device_ids = get_all_device_ids();
+
+    std::set<int> filtered_device_ids;
+
+    for (const auto &device_token : device_tokens) {
+        // Check if token is BDF format (contains colon and dot).
+        if (utils::is_bdf_string(device_token)) {
+            bool matched_bdf_pattern = false;
+            for (const auto &[bdf, device_id] : bdf_to_device_id_map) {
+                if (bdf.find(device_token) != std::string::npos) {
+                    filtered_device_ids.insert(device_id);
+                    log_debug(
+                        LogUMD, "Added device ID {} with BDF {} because of pattern: {}", device_id, bdf, device_token);
+                    matched_bdf_pattern = true;
+                }
+            }
+
+            if (!matched_bdf_pattern) {
+                UMD_THROW(
+                    error::RuntimeError,
+                    fmt::format("BDF pattern in TT_VISIBLE_DEVICES: {} did not match any devices.", device_token));
+            }
+
+            continue;
+        }
+
+        if (utils::is_integer_string(device_token)) {
+            int logical_device_id = std::stoi(device_token);
+
+            if (logical_device_id < 0 || logical_device_id >= static_cast<int>(all_device_ids.size())) {
+                UMD_THROW(
+                    error::RuntimeError,
+                    fmt::format(
+                        "Invalid device ID in TT_VISIBLE_DEVICES: {}.  Valid device identifiers are either integers or "
+                        "part of the BDF string. Valid integer IDs are between 0 and {}.",
+                        device_token,
+                        all_device_ids.size() - 1));
+            }
+
+            filtered_device_ids.insert(all_device_ids[logical_device_id]);
+        } else {
+            UMD_THROW(
+                error::RuntimeError,
+                fmt::format(
+                    "Invalid device identifier in TT_VISIBLE_DEVICES: {}.  Valid device identifiers are either "
+                    "integers or "
+                    "part of the BDF string.",
+                    device_token));
+        }
+    }
+
+    return std::vector<int>(filtered_device_ids.begin(), filtered_device_ids.end());
+}
 
 // Ordinals are already assigned in sorted interface-path order, which is stable; there is no
 // separate BDF ordering to apply.
