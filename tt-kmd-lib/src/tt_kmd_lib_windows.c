@@ -12,10 +12,12 @@
 // path ("\\?\...") or a Linux-style path whose last component is the ordinal
 // ("/dev/tenstorrent/0", or just "0").
 //
-// Functionality the driver does not implement yet (DMA-buffer allocation, page
-// pinning, dma-buf export, reset, power state, resource locks, driver version
-// query) keeps returning -ENOSYS. Out-parameters are zeroed/nulled on failure
-// so callers never observe garbage.
+// Device reset is wired to IOCTL_TTWIND_RESET_DEVICE, and the 64 per-device
+// resource locks are implemented with named kernel mutexes (see the tt_lock_*
+// section). Functionality the driver does not implement yet (DMA-buffer
+// allocation, page pinning, dma-buf export, power state, driver version query)
+// keeps returning -ENOSYS. Out-parameters are zeroed/nulled on failure so
+// callers never observe garbage.
 
 #include <windows.h>
 #include <winioctl.h>
@@ -24,6 +26,7 @@
 
 #include <errno.h>
 #include <stdint.h>
+#include <stdio.h> /* swprintf */
 #include <stdlib.h>
 #include <string.h>
 
@@ -39,6 +42,11 @@
 
 struct tt_device_t {
     HANDLE handle;
+
+    /* Resource locks (tt_lock_*): lazily created named mutexes plus this
+     * handle's recursive-hold count per slot; see the tt_lock_* section. */
+    HANDLE lock_handles[TT_RESOURCE_LOCK_COUNT];
+    unsigned lock_held_count[TT_RESOURCE_LOCK_COUNT];
 };
 
 struct tt_tlb_t {
@@ -292,8 +300,24 @@ int tt_device_close(tt_device_t* dev) {
     if (dev == NULL) {
         return -EINVAL;
     }
+
+    /* Mirror the Linux driver's close semantics: every resource lock this
+     * handle still holds is released. ReleaseMutex only succeeds on the
+     * owning thread; if close runs on another thread the release fails and
+     * the mutex is recovered as abandoned when the owning thread exits. */
+    for (unsigned i = 0; i < TT_RESOURCE_LOCK_COUNT; i++) {
+        if (dev->lock_handles[i] != NULL) {
+            while (dev->lock_held_count[i] > 0 && ReleaseMutex(dev->lock_handles[i])) {
+                dev->lock_held_count[i]--;
+            }
+            CloseHandle(dev->lock_handles[i]);
+        }
+    }
+
     if (!CloseHandle(dev->handle)) {
-        return last_err();
+        int err = last_err();
+        free(dev);
+        return err;
     }
     free(dev);
     return 0;
@@ -790,6 +814,13 @@ int tt_noc_write(tt_device_t* dev, uint8_t x, uint8_t y, uint64_t addr, const vo
 
 /* --- not yet supported by tt-wind --------------------------------------- */
 
+/* Everything below returns -ENOSYS because the driver has no backing
+ * facility yet: DMA mapping / page pinning / hugepage-style DMA buffers need
+ * driver-owned common-buffer DMA and NOC-visible IOVA programming, dma-buf
+ * export is a Linux-only kernel object, and per-handle power-state voting
+ * (TT_POWER_FLAG_*) has no tt-wind ioctl - the driver unconditionally sends
+ * the power-up messages at start instead. */
+
 int tt_dma_map(tt_device_t* dev, void* addr, size_t len, int flags, tt_dma_t** out_dma) {
     (void)dev;
     (void)addr;
@@ -885,35 +916,175 @@ int tt_device_set_power_state(tt_device_t* dev, uint16_t power_flags) {
     return -ENOSYS;
 }
 
+/* --- device reset ------------------------------------------------------- */
+
+/* Backed by IOCTL_TTWIND_RESET_DEVICE. tt-wind implements exactly one reset
+ * kind - tt-kmd's Blackhole ASIC reset with config-space save/restore and a
+ * firmware power-up afterwards - so the Linux reset-flag values that name a
+ * whole-device reset (RESTORE_STATE, USER_RESET, ASIC_RESET) all map to it.
+ * The remaining values (RESET_PCIE_LINK, CONFIG_WRITE, ASIC_DMC_RESET,
+ * POST_RESET) have no tt-wind equivalent and return -ENOSYS.
+ *
+ * The driver refuses the reset with -EBUSY while any user mapping of device
+ * memory exists on any handle (it cannot revoke user page tables yet); the
+ * caller must unmap/free all BAR and TLB mappings first. */
 int tt_device_reset(tt_device_t* dev, uint32_t reset_flags) {
-    (void)dev;
-    (void)reset_flags;
-    return -ENOSYS;
+    if (dev == NULL) {
+        return -EINVAL;
+    }
+
+    switch (reset_flags) {
+        case 0u: /* TENSTORRENT_RESET_DEVICE_RESTORE_STATE */
+        case 3u: /* TENSTORRENT_RESET_DEVICE_USER_RESET */
+        case 4u: /* TENSTORRENT_RESET_DEVICE_ASIC_RESET */
+            break;
+        default:
+            return -ENOSYS;
+    }
+
+    TTWIND_RESET_DEVICE_IN in;
+    memset(&in, 0, sizeof(in));
+    return ttwind_ioctl(dev->handle, IOCTL_TTWIND_RESET_DEVICE, &in, sizeof(in), NULL, 0);
+}
+
+/* --- resource locks ------------------------------------------------------ */
+
+/* The 64 advisory per-device resource locks are implemented with named kernel
+ * mutexes rather than a driver ioctl (tt-wind has none yet):
+ *
+ *  - Namespace: the per-session "Local\" namespace, matching UMD's
+ *    RobustMutex, which guards the same class of cross-process resources.
+ *    All processes coordinating over a device normally run in one logon
+ *    session; system-wide exclusion across sessions/services would need
+ *    "Global\" and is not needed today.
+ *  - Key: the device's PCI location (domain/bus/device/function) plus the
+ *    slot index. The PCI location identifies the physical device no matter
+ *    whether it was opened by ordinal or by full interface path (an ordinal
+ *    is just a position in the sorted interface list).
+ *  - Crash recovery: a mutex whose owner died is acquired with
+ *    WAIT_ABANDONED; that counts as a successful (recovered) acquire, the
+ *    same policy as RobustMutex.
+ *
+ * Caveat vs the Linux driver locks: Win32 mutex ownership is per-THREAD, not
+ * per device handle. Acquire and release must happen on the same thread, and
+ * acquiring a slot twice through two tt_device_t handles on one thread
+ * succeeds recursively instead of failing. The per-handle hold count below
+ * keeps release/test bookkeeping right for the supported (same-thread) use. */
+
+static int lock_get_mutex(tt_device_t* dev, uint8_t index, HANDLE* out_mutex) {
+    if (dev->lock_handles[index] == NULL) {
+        TTWIND_DEVICE_INFO_OUT info;
+        int err = get_device_info(dev, &info);
+        if (err != 0) {
+            return err;
+        }
+
+        wchar_t name[128];
+        swprintf(
+            name,
+            ARRAYSIZE(name),
+            L"Local\\ttwind-lock-%04x:%02x:%02x.%x-slot%u",
+            info.PciDomain,
+            info.Bus,
+            info.Device,
+            info.Function,
+            (unsigned)index);
+
+        HANDLE h = CreateMutexW(NULL, FALSE, name);
+        if (h == NULL) {
+            return last_err();
+        }
+        dev->lock_handles[index] = h;
+    }
+    *out_mutex = dev->lock_handles[index];
+    return 0;
 }
 
 int tt_lock_acquire(tt_device_t* dev, uint8_t index, int* out_acquired) {
-    (void)dev;
-    (void)index;
-    if (out_acquired) {
+    if (out_acquired != NULL) {
         *out_acquired = 0;
     }
-    return -ENOSYS;
+    if (dev == NULL || index >= TT_RESOURCE_LOCK_COUNT || out_acquired == NULL) {
+        return -EINVAL;
+    }
+
+    HANDLE mutex = NULL;
+    int err = lock_get_mutex(dev, index, &mutex);
+    if (err != 0) {
+        return err;
+    }
+
+    switch (WaitForSingleObject(mutex, 0)) {
+        case WAIT_OBJECT_0:
+        case WAIT_ABANDONED: /* previous owner died; lock recovered */
+            dev->lock_held_count[index]++;
+            *out_acquired = 1;
+            return 0;
+        case WAIT_TIMEOUT:
+            *out_acquired = 0;
+            return 0;
+        default:
+            return last_err();
+    }
 }
 
 int tt_lock_release(tt_device_t* dev, uint8_t index, int* out_was_held) {
-    (void)dev;
-    (void)index;
-    if (out_was_held) {
+    if (out_was_held != NULL) {
         *out_was_held = 0;
     }
-    return -ENOSYS;
+    if (dev == NULL || index >= TT_RESOURCE_LOCK_COUNT) {
+        return -EINVAL;
+    }
+
+    /* Not held by this handle: report a double release, like the driver. */
+    if (dev->lock_handles[index] == NULL || dev->lock_held_count[index] == 0) {
+        return 0;
+    }
+
+    if (!ReleaseMutex(dev->lock_handles[index])) {
+        /* ERROR_NOT_OWNER: held, but not by the calling thread (see the
+         * thread-affinity caveat above). */
+        return (GetLastError() == ERROR_NOT_OWNER) ? -EPERM : last_err();
+    }
+
+    dev->lock_held_count[index]--;
+    if (out_was_held != NULL) {
+        *out_was_held = 1;
+    }
+    return 0;
 }
 
 int tt_lock_test(tt_device_t* dev, uint8_t index, uint32_t* out_state) {
-    (void)dev;
-    (void)index;
-    if (out_state) {
+    if (out_state != NULL) {
         *out_state = 0;
     }
-    return -ENOSYS;
+    if (dev == NULL || index >= TT_RESOURCE_LOCK_COUNT || out_state == NULL) {
+        return -EINVAL;
+    }
+
+    if (dev->lock_held_count[index] > 0) {
+        *out_state = TT_LOCK_STATE_HELD_BY_SELF | TT_LOCK_STATE_HELD_BY_ANY;
+        return 0;
+    }
+
+    HANDLE mutex = NULL;
+    int err = lock_get_mutex(dev, index, &mutex);
+    if (err != 0) {
+        return err;
+    }
+
+    /* Probe with a zero-timeout acquire; on success nobody held it, so undo
+     * the probe immediately. Inherently racy, like the driver's test. */
+    switch (WaitForSingleObject(mutex, 0)) {
+        case WAIT_OBJECT_0:
+        case WAIT_ABANDONED:
+            ReleaseMutex(mutex);
+            *out_state = 0;
+            return 0;
+        case WAIT_TIMEOUT:
+            *out_state = TT_LOCK_STATE_HELD_BY_ANY;
+            return 0;
+        default:
+            return last_err();
+    }
 }
