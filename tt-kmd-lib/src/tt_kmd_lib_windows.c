@@ -918,14 +918,23 @@ int tt_device_set_power_state(tt_device_t* dev, uint16_t power_flags) {
 
 /* --- device reset ------------------------------------------------------- */
 
-/* Backed by IOCTL_TTWIND_RESET_DEVICE. tt-wind implements exactly one reset
- * kind - tt-kmd's Blackhole ASIC reset with config-space save/restore and a
- * firmware power-up afterwards - so the Linux reset-flag values that name a
- * whole-device reset (RESTORE_STATE, USER_RESET, ASIC_RESET) all map to it.
- * The remaining values (RESET_PCIE_LINK, CONFIG_WRITE, ASIC_DMC_RESET,
- * POST_RESET) have no tt-wind equivalent and return -ENOSYS.
+/* Backed by tt-wind's split arm/recover reset (driver 100.3.4.0+). tt-wind
+ * implements exactly one reset kind - tt-kmd's Blackhole ASIC reset with
+ * config-space save/restore and a firmware power-up afterwards - so the Linux
+ * reset-flag values that name a whole-device reset (RESTORE_STATE, USER_RESET,
+ * ASIC_RESET) all map to it. The remaining values (RESET_PCIE_LINK,
+ * CONFIG_WRITE, ASIC_DMC_RESET, POST_RESET) have no tt-wind equivalent and
+ * return -ENOSYS.
  *
- * The driver refuses the reset with -EBUSY while any user mapping of device
+ * IOCTL_TTWIND_RESET_DEVICE only ARMS the chip's self-reset and returns
+ * immediately (the driver never sleeps or touches MMIO while the device may
+ * be off the bus); recovery is IOCTL_TTWIND_POST_RESET, which this function
+ * polls about every 100 ms until the device is back, ~15 s bound - the same
+ * sequence as tt-wind's ttwind-info `reset` subcommand. To the caller the
+ * whole arm+recover flow is still one synchronous tt_device_reset() call,
+ * matching the Linux backend's semantics.
+ *
+ * The driver refuses the arm with -EBUSY while any user mapping of device
  * memory exists on any handle (it cannot revoke user page tables yet); the
  * caller must unmap/free all BAR and TLB mappings first. */
 int tt_device_reset(tt_device_t* dev, uint32_t reset_flags) {
@@ -942,9 +951,40 @@ int tt_device_reset(tt_device_t* dev, uint32_t reset_flags) {
             return -ENOSYS;
     }
 
-    TTWIND_RESET_DEVICE_IN in;
-    memset(&in, 0, sizeof(in));
-    return ttwind_ioctl(dev->handle, IOCTL_TTWIND_RESET_DEVICE, &in, sizeof(in), NULL, 0);
+    /* Arm the reset. Fails without disturbing the device (e.g. -EBUSY while
+     * user mappings exist, -ENODEV if the device is already off the bus). */
+    TTWIND_RESET_DEVICE_IN reset_in;
+    memset(&reset_in, 0, sizeof(reset_in));
+    int err = ttwind_ioctl(dev->handle, IOCTL_TTWIND_RESET_DEVICE, &reset_in, sizeof(reset_in), NULL, 0);
+    if (err != 0) {
+        return err;
+    }
+
+    /* Poll POST_RESET until the device returns and recovery completes.
+     * STATUS_DEVICE_DOES_NOT_EXIST (ERROR_BAD_UNIT) means the device is not
+     * back on the bus yet; the retryable restore/MMIO failures also just get
+     * retried within the budget. Outcome mapping:
+     *   recovered                      ->  0
+     *   chip ignored the reset trigger -> -ENXIO   (ERROR_GEN_FAILURE /
+     *       STATUS_UNSUCCESSFUL; the device was never disturbed, so
+     *       retrying would only report a hollow success)
+     *   device never came back in ~15s -> -ETIMEDOUT */
+    TTWIND_POST_RESET_IN post_in;
+    memset(&post_in, 0, sizeof(post_in));
+    for (DWORD waited = 0;; waited += 100) {
+        DWORD returned = 0;
+        if (DeviceIoControl(
+                dev->handle, IOCTL_TTWIND_POST_RESET, &post_in, sizeof(post_in), NULL, 0, &returned, NULL)) {
+            return 0;
+        }
+        if (GetLastError() == ERROR_GEN_FAILURE) {
+            return -ENXIO;
+        }
+        if (waited >= 15000) {
+            return -ETIMEDOUT;
+        }
+        Sleep(100);
+    }
 }
 
 /* --- resource locks ------------------------------------------------------ */
