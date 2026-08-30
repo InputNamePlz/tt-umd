@@ -5,8 +5,10 @@
 #include "umd/device/chip_helpers/simulation_sysmem_manager.hpp"
 
 #include <fmt/format.h>
+#ifndef _WIN32
 #include <sys/mman.h>  // for mmap, munmap
 #include <unistd.h>
+#endif
 
 #include <algorithm>
 #include <cstddef>
@@ -63,6 +65,10 @@ bool SimulationSysmemManager::init_sysmem(uint32_t num_host_mem_channels) {
         total_size -= 256 * (1ULL << 20);
     }
 
+#ifdef _WIN32
+    // The backing store is an anonymous mmap on Linux; not yet supported on Windows.
+    UMD_THROW(error::RuntimeError, "Simulation system memory (sysmem) is not yet supported on Windows.");
+#else
     system_memory_ =
         static_cast<uint8_t*>(mmap(nullptr, total_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0));
     UMD_ASSERT(system_memory_ != MAP_FAILED, error::RuntimeError, "system_memory mmap() failed");
@@ -85,6 +91,7 @@ bool SimulationSysmemManager::init_sysmem(uint32_t num_host_mem_channels) {
     }
 
     return true;
+#endif  // _WIN32
 }
 
 bool SimulationSysmemManager::pin_or_map_sysmem_to_device() { return true; }
@@ -97,13 +104,17 @@ void SimulationSysmemManager::unpin_or_unmap_sysmem() {
         std::lock_guard<std::mutex> lock(registry_->mutex);
         registry_->buffers.clear();
     }
+#ifndef _WIN32
     for (const auto& [allocation, allocation_size] : owned_allocations_) {
         munmap(allocation, allocation_size);
     }
+#endif
     owned_allocations_.clear();
     hugepage_mapping_per_channel.clear();
     if (system_memory_ != nullptr) {
+#ifndef _WIN32
         munmap(system_memory_, system_memory_size_);
+#endif
         system_memory_ = nullptr;
         system_memory_size_ = 0;
     }
@@ -154,6 +165,9 @@ void* SimulationSysmemManager::get_mapped_host_ptr(uint64_t device_io_addr) {
 
 std::unique_ptr<SysmemBuffer> SimulationSysmemManager::allocate_sysmem_buffer(
     size_t sysmem_buffer_size, const bool map_to_noc) {
+#ifdef _WIN32
+    UMD_THROW(error::RuntimeError, "Simulation sysmem buffers are not yet supported on Windows.");
+#else
     void* mapping =
         mmap(nullptr, sysmem_buffer_size, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE | MAP_POPULATE, -1, 0);
     UMD_ASSERT(mapping != MAP_FAILED, error::RuntimeError, "Simulation sysmem buffer mmap() failed");
@@ -162,11 +176,17 @@ std::unique_ptr<SysmemBuffer> SimulationSysmemManager::allocate_sysmem_buffer(
         owned_allocations_.push_back({mapping, sysmem_buffer_size});
     }
     return map_sysmem_buffer(mapping, sysmem_buffer_size, map_to_noc);
+#endif  // _WIN32
 }
 
 std::unique_ptr<SysmemBuffer> SimulationSysmemManager::map_sysmem_buffer(
     void* buffer, size_t sysmem_buffer_size, const bool map_to_noc, DeviceBufferAccess device_access) {
+#ifdef _WIN32
+    // Fixed 4KiB assumption; simulation sysmem is not yet supported on Windows anyway.
+    static const int64_t page_size = 4096;
+#else
     static const auto page_size = sysconf(_SC_PAGESIZE);
+#endif
     const uint64_t mapped_size = align_up(sysmem_buffer_size, page_size);
 
     uint64_t device_io_addr = 0;
