@@ -8,6 +8,8 @@
 #ifndef _WIN32
 #include <sys/mman.h>  // for mmap, munmap
 #include <unistd.h>
+#else
+#include <windows.h>  // for VirtualAlloc, VirtualFree
 #endif
 
 #include <algorithm>
@@ -68,14 +70,18 @@ bool SimulationSysmemManager::init_sysmem(uint32_t num_host_mem_channels) {
     }
 
 #ifdef _WIN32
-    // The backing store is an anonymous mmap on Linux; not yet supported on Windows.
-    UMD_THROW(error::RuntimeError, "Simulation system memory (sysmem) is not yet supported on Windows.");
+    // The backing store is an anonymous mmap on Linux; VirtualAlloc is its Windows equivalent
+    // (committed pages are demand-zeroed, so nothing is touched until first use).
+    system_memory_ = static_cast<uint8_t*>(VirtualAlloc(nullptr, total_size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
+    UMD_ASSERT(system_memory_ != nullptr, error::RuntimeError, "system_memory VirtualAlloc() failed");
+    system_memory_size_ = total_size;
 #else
     system_memory_ =
         static_cast<uint8_t*>(mmap(nullptr, total_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0));
     UMD_ASSERT(system_memory_ != MAP_FAILED, error::RuntimeError, "system_memory mmap() failed");
     madvise(system_memory_, total_size, MADV_HUGEPAGE);
     system_memory_size_ = total_size;
+#endif  // _WIN32
 
     // The mapped-buffer arena starts immediately after the hugepage region so
     // that device IO addresses assigned to mapped buffers (pcie_base_ + arena
@@ -93,7 +99,6 @@ bool SimulationSysmemManager::init_sysmem(uint32_t num_host_mem_channels) {
     }
 
     return true;
-#endif  // _WIN32
 }
 
 bool SimulationSysmemManager::pin_or_map_sysmem_to_device() { return true; }
@@ -110,6 +115,8 @@ void SimulationSysmemManager::unpin_or_unmap_sysmem() {
     if (system_memory_ != nullptr) {
 #ifndef _WIN32
         munmap(system_memory_, system_memory_size_);
+#else
+        VirtualFree(system_memory_, 0, MEM_RELEASE);
 #endif
         system_memory_ = nullptr;
         system_memory_size_ = 0;
@@ -162,7 +169,14 @@ void* SimulationSysmemManager::get_mapped_host_ptr(uint64_t device_io_addr) {
 std::unique_ptr<SysmemBuffer> SimulationSysmemManager::allocate_sysmem_buffer(
     size_t sysmem_buffer_size, const bool map_to_noc) {
 #ifdef _WIN32
-    UMD_THROW(error::RuntimeError, "Simulation sysmem buffers are not yet supported on Windows.");
+    void* mapping = VirtualAlloc(nullptr, sysmem_buffer_size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+    UMD_ASSERT(mapping != nullptr, error::RuntimeError, "Simulation sysmem buffer VirtualAlloc() failed");
+    // This mapping belongs to the buffer, so it is released along with the registry entry.
+    const SysmemBuffer::Deleter release_mapping = [](void* aligned_va) {
+        if (!VirtualFree(aligned_va, 0, MEM_RELEASE)) {
+            log_warning(LogUMD, "Failed to VirtualFree simulation sysmem buffer at {:p}.", aligned_va);
+        }
+    };
 #else
     void* mapping =
         mmap(nullptr, sysmem_buffer_size, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE | MAP_POPULATE, -1, 0);
@@ -180,16 +194,16 @@ std::unique_ptr<SysmemBuffer> SimulationSysmemManager::allocate_sysmem_buffer(
                 strerror(errno));
         }
     };
+#endif  // _WIN32
 
     try {
         return register_and_wrap(
             mapping, sysmem_buffer_size, map_to_noc, DeviceBufferAccess::READ_WRITE, release_mapping);
     } catch (...) {
-        // Nothing owns the mmap yet, so free it here rather than leaking it.
+        // Nothing owns the allocation yet, so free it here rather than leaking it.
         release_mapping(mapping);
         throw;
     }
-#endif  // _WIN32
 }
 
 std::unique_ptr<SysmemBuffer> SimulationSysmemManager::map_sysmem_buffer(
@@ -205,7 +219,8 @@ std::unique_ptr<SysmemBuffer> SimulationSysmemManager::register_and_wrap(
     DeviceBufferAccess device_access,
     SysmemBuffer::Deleter release_backing_memory) {
 #ifdef _WIN32
-    // Fixed 4KiB assumption; simulation sysmem is not yet supported on Windows anyway.
+    // Windows x64 pages are always 4 KiB (VirtualAlloc granularity is larger, but page protection
+    // and demand-zeroing work at page size).
     static const int64_t page_size = 4096;
 #else
     static const auto page_size = sysconf(_SC_PAGESIZE);
