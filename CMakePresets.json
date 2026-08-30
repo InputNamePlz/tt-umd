@@ -70,6 +70,48 @@
             }
         },
         {
+            "name": "windows-msvc",
+            "displayName": "Windows MSVC",
+            "description": "Windows build using Visual Studio 2022 (MSVC)",
+            "generator": "Visual Studio 17 2022",
+            "architecture": "x64",
+            "binaryDir": "${sourceDir}/.build/windows-msvc",
+            "condition": {
+                "type": "equals",
+                "lhs": "${hostSystemName}",
+                "rhs": "Windows"
+            },
+            "cacheVariables": {
+                "TT_UMD_BUILD_STATIC": {
+                    "value": "ON"
+                },
+                "TT_UMD_BUILD_TOOLS": {
+                    "value": "OFF"
+                },
+                "TT_UMD_BUILD_TESTS": {
+                    "value": "OFF"
+                },
+                "TT_UMD_BUILD_SIMULATION": {
+                    "value": "OFF"
+                },
+                "TT_UMD_BUILD_PYTHON": {
+                    "value": "OFF"
+                },
+                "TT_UMD_BUILD_EXAMPLES": {
+                    "value": "OFF"
+                },
+                "TT_UMD_BUILD_JTAG": {
+                    "value": "OFF"
+                },
+                "TT_UMD_ENABLE_CLANG_TIDY": {
+                    "value": "OFF"
+                },
+                "CMAKE_COMPILE_WARNING_AS_ERROR": {
+                    "value": "OFF"
+                }
+            }
+        },
+        {
             "name": "code-analysis",
             "inherits": "default",
             "description": "Run Clang Static Analyzer",
@@ -92,6 +134,11 @@
             "name": "debug",
             "configurePreset": "default",
             "configuration": "Debug"
+        },
+        {
+            "name": "windows-msvc",
+            "configurePreset": "windows-msvc",
+            "configuration": "Release"
         },
         {
             "name": "clang-tidy",
