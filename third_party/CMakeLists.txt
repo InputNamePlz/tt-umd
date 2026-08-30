@@ -6,7 +6,11 @@ set(CMAKE_CXX_CLANG_TIDY "")
 
 # Disable all warnings in third-party code
 # This keeps build output clean and prevents failures from dependencies we don't control
-add_compile_options(-w)
+if(MSVC)
+    add_compile_options(/w)
+else()
+    add_compile_options(-w)
+endif()
 
 include(${PROJECT_SOURCE_DIR}/cmake/CPM.cmake)
 
@@ -28,7 +32,7 @@ if(TT_UMD_BUILD_TESTS)
             # silently drop the target that test_common links.
             "BUILD_GMOCK ON"
     )
-    if(GTest_ADDED)
+    if(GTest_ADDED AND NOT MSVC)
         target_compile_options(gtest PRIVATE -Wno-implicit-int-float-conversion)
     endif()
 endif()

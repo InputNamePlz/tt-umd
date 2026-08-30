@@ -120,7 +120,7 @@ add_custom_target(umd_all_generated_files)
 
 # Configure clang-tidy AFTER third_party so dependencies are not linted
 option(TT_UMD_ENABLE_CLANG_TIDY "Enable clang-tidy checks during the build" ON)
-if(TT_UMD_ENABLE_CLANG_TIDY)
+if(TT_UMD_ENABLE_CLANG_TIDY AND NOT MSVC)
     find_program(
         CLANG_TIDY_EXE
         NAMES
@@ -149,14 +149,18 @@ endif()
 
 set(TT_X86_MARCH "x86-64-v3" CACHE STRING "x86_64 architecture passed to -march")
 
-add_compile_options(
-    "$<$<STREQUAL:${CMAKE_SYSTEM_PROCESSOR},x86_64>:-march=${TT_X86_MARCH}>"
-    -Wall
-    -Wno-sign-compare
-)
+if(MSVC)
+    add_compile_options(/W3)
+else()
+    add_compile_options(
+        "$<$<STREQUAL:${CMAKE_SYSTEM_PROCESSOR},x86_64>:-march=${TT_X86_MARCH}>"
+        -Wall
+        -Wno-sign-compare
+    )
 
-# Fixed this warning on clang, but not yet gcc
-add_compile_options("$<$<NOT:$<CXX_COMPILER_ID:Clang>>:-Wno-unused-but-set-variable>")
+    # Fixed this warning on clang, but not yet gcc
+    add_compile_options("$<$<NOT:$<CXX_COMPILER_ID:Clang>>:-Wno-unused-but-set-variable>")
+endif()
 
 # Conditionally add -Wno-maybe-uninitialized for GCC
 # If this is left enabled it produces a hard to track down issue in stimulus_generators.hpp with ConstrainedTemplateTemplateGenerator
