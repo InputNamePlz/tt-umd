@@ -20,6 +20,24 @@ sudo apt install -y libhwloc-dev cmake ninja-build
 
 UMD currently supports gcc-11 and newer gcc versions, and clang-13 and newer clang versions.
 
+## Windows (experimental, this branch)
+
+This branch adds a native Windows host build on top of the [tt-wind](https://github.com/InputNamePlz/tt-wind)
+kernel driver, which plays the role of tt-kmd on Windows. The Windows code implements the existing
+`tt-kmd-lib` contract and lives in `*_windows.cpp` / `tt_kmd_lib_windows.c`; Linux code paths are unchanged.
+
+Requirements: Visual Studio 2022 Build Tools (C++ workload, CMake 3.25+), and the tt-wind driver installed.
+
+```powershell
+cmake --preset windows-msvc -DTT_UMD_BUILD_TESTS=ON
+cmake --build .build\windows-msvc --config Release
+.build\windows-msvc\test\umd\api\Release\api_tests.exe
+```
+
+Status (Blackhole P100A, 2026-09-02): api 262 pass / 49 skip, unified 10/10, misc 16/16, Blackhole unit 16/16.
+Skips are tests for hardware this card does not have (Wormhole, Ethernet, multi-chip). Not yet supported on
+Windows: JTAG, IOMMU mode, simulation. Hugepages are not needed; sysmem is provided by the driver.
+
 ## IOMMU and Hugepage requirements
 To determine whether your system requires hugepage configuration, run the provided script:
 
