@@ -119,7 +119,15 @@ TEST_F(TestTTVisibleDevices, OpenChipsByBDF) {
 
     int total_combinations = 1 << pci_bdf_addresses.size();
 
-    for (uint32_t combination = 0; combination < total_combinations; combination++) {
+#ifdef _WIN32
+    // Windows cannot hold an environment variable with an empty value: both _putenv_s and
+    // SetEnvironmentVariable delete the variable instead. The empty combination therefore reads as
+    // "TT_VISIBLE_DEVICES unset" (all chips visible) rather than "no chips visible", so skip it.
+    const uint32_t first_combination = 1;
+#else
+    const uint32_t first_combination = 0;
+#endif
+    for (uint32_t combination = first_combination; combination < total_combinations; combination++) {
         std::vector<std::string> target_bdf_addresses;
         target_bdf_addresses.reserve(pci_bdf_addresses.size());
         for (int i = 0; i < pci_bdf_addresses.size(); i++) {
