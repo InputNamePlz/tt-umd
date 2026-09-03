@@ -1,0 +1,34 @@
+name: Windows build (host-only)
+
+# Best-effort Windows CI: configures and builds tt-umd with MSVC via the
+# windows-msvc CMake preset, then runs the host-only test binaries (no
+# Tenstorrent hardware present on GitHub-hosted runners).
+on:
+  push:
+    branches:
+      - windows
+  workflow_dispatch:
+
+jobs:
+  windows-msvc-build:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Configure (windows-msvc preset)
+        run: cmake --preset windows-msvc -DTT_UMD_BUILD_TESTS=ON
+
+      - name: Build (Release)
+        run: cmake --build .build/windows-msvc --config Release
+
+      - name: Run umd_misc_tests (host-only)
+        run: .build/windows-msvc/test/umd/misc/Release/umd_misc_tests.exe
+        shell: bash
+
+      - name: Run baremetal_tests (host-only)
+        run: .build/windows-msvc/test/umd/baremetal/Release/baremetal_tests.exe
+        shell: bash
