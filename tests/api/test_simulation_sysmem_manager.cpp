@@ -108,7 +108,13 @@ TEST(ApiSimulationSysmemManager, TestFourChannels) {
 // once, and it must receive the page-aligned start of the mapping rather than the caller's VA — that
 // is the address the pages were pinned at and the one that has to be released.
 TEST(ApiSimulationSysmemManager, BufferDeleterRunsOnceWithAlignedStart) {
+#ifdef _WIN32
+    // Windows x64 pages are always 4 KiB (VirtualAlloc granularity is larger, but page protection
+    // and demand-zeroing work at page size).
+    const size_t page_size = 4096;
+#else
     const size_t page_size = static_cast<size_t>(sysconf(_SC_PAGESIZE));
+#endif
 
     std::vector<uint8_t> backing(3 * page_size, 0);
     const uintptr_t raw = reinterpret_cast<uintptr_t>(backing.data());
