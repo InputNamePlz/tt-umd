@@ -19,11 +19,51 @@ jobs:
         with:
           submodules: recursive
 
+      - name: Environment info
+        shell: pwsh
+        run: |
+          cmake --version
+          Get-Command cmake | Format-List
+          $vsPath = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+          Write-Host "vswhere installationPath: $vsPath"
+
       - name: Configure (windows-msvc preset)
-        run: cmake --preset windows-msvc -DTT_UMD_BUILD_TESTS=ON
+        id: configure
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          cmake --preset windows-msvc -DTT_UMD_BUILD_TESTS=ON 2>&1 | Tee-Object -FilePath configure.log
+          exit $LASTEXITCODE
+
+      - name: Report configure failure
+        if: steps.configure.outcome == 'failure'
+        shell: pwsh
+        run: |
+          $lines = Get-Content configure.log -Tail 60
+          foreach ($line in $lines) {
+            $escaped = $line -replace '%','%25' -replace "`r",'%0D' -replace "`n",'%0A'
+            Write-Host "::error::$escaped"
+          }
+          exit 1
 
       - name: Build (Release)
-        run: cmake --build .build/windows-msvc --config Release
+        id: build
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          cmake --build .build/windows-msvc --config Release 2>&1 | Tee-Object -FilePath build.log
+          exit $LASTEXITCODE
+
+      - name: Report build failure
+        if: steps.build.outcome == 'failure'
+        shell: pwsh
+        run: |
+          $lines = Get-Content build.log -Tail 80
+          foreach ($line in $lines) {
+            $escaped = $line -replace '%','%25' -replace "`r",'%0D' -replace "`n",'%0A'
+            Write-Host "::error::$escaped"
+          }
+          exit 1
 
       - name: Run umd_misc_tests (host-only)
         run: .build/windows-msvc/test/umd/misc/Release/umd_misc_tests.exe
