@@ -9,8 +9,10 @@
 #ifndef UMD_ERROR_HPP_INTERNAL_INCLUDE
 #error "error_detail.hpp is a private header. Include umd/device/utils/error.hpp instead."
 #endif
+#ifndef _WIN32
 #include <cxxabi.h>
 #include <execinfo.h>
+#endif
 
 #include <cstdint>
 #include <cstdlib>
@@ -45,7 +47,17 @@ namespace tt::umd::error {
  * @param skip Number of top stack frames to skip (default: 1, skipping this function itself).
  * @return Vector of demangled stack frame strings, empty if capture fails.
  */
+#ifdef _WIN32
+// Implemented in device/utils/stacktrace_windows.cpp: capturing needs dbghelp, whose header (and
+// windows.h) must not leak into this public header. Frames are symbolized when PDBs are available
+// and fall back to module-relative addresses otherwise.
+std::vector<std::string> capture_stacktrace_windows(uint32_t max_frames, uint32_t skip);
+#endif
+
 static inline std::vector<std::string> get_stacktrace(uint32_t max_frames = 64, uint32_t skip = 1) {
+#ifdef _WIN32
+    return capture_stacktrace_windows(max_frames, skip);
+#else
     if (skip >= max_frames) {
         return std::vector<std::string>{};
     }
@@ -94,6 +106,7 @@ static inline std::vector<std::string> get_stacktrace(uint32_t max_frames = 64, 
     }
 
     return stack_frames;
+#endif  // _WIN32
 }
 
 /**

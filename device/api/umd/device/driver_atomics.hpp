@@ -4,6 +4,41 @@
 
 #pragma once
 
+#if defined(_MSC_VER) && !defined(__clang__)
+
+#include <intrin.h>
+
+namespace tt_driver_atomics {
+
+#if defined(_M_X64) || defined(_M_IX86)
+// Store-Any barrier.
+static __forceinline void sfence() { _mm_sfence(); }
+
+// Load-Any barrier.
+static __forceinline void lfence() { _mm_lfence(); }
+
+// Any-Any barrier.
+static __forceinline void mfence() { _mm_mfence(); }
+
+#elif defined(_M_ARM64)
+
+// Full memory barrier (full system). ARM does not have a Store-Any barrier.
+static __forceinline void sfence() { __dmb(_ARM64_BARRIER_SY); }
+
+// Load-Any barrier (full system).
+static __forceinline void lfence() { __dmb(_ARM64_BARRIER_LD); }
+
+// Full memory barrier (full system).
+static __forceinline void mfence() { __dmb(_ARM64_BARRIER_SY); }
+
+#else
+#error "Unsupported architecture"
+#endif
+
+}  // namespace tt_driver_atomics
+
+#else  // !_MSC_VER
+
 #if defined(__x86_64__) || defined(__i386__)
 #include <immintrin.h>
 #endif
@@ -53,3 +88,5 @@ static inline __attribute__((always_inline)) void mfence() { asm volatile("fence
 #endif
 
 }  // namespace tt_driver_atomics
+
+#endif  // _MSC_VER

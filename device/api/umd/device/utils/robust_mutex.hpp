@@ -4,8 +4,14 @@
 
 #pragma once
 
+#ifndef _WIN32
 #include <pthread.h>
 #include <sys/types.h>
+#else
+// POSIX pid_t, used in the public probe_lock() return type. On Windows it is a plain int
+// (process/thread ids fit in 32 bits).
+using pid_t = int;
+#endif
 
 #include <atomic>
 #include <chrono>
@@ -66,6 +72,7 @@ public:
     std::optional<std::pair<pid_t, pid_t>> probe_lock(std::chrono::seconds timeout = std::chrono::seconds(0));
 
 private:
+#ifndef _WIN32
     // A wrapper which holds the flag for whether the mutex has been initialized or not,
     // and tracks the PID of the current lock owner.
     struct pthread_mutex_wrapper {
@@ -83,6 +90,7 @@ private:
     static_assert(
         __atomic_always_lock_free(sizeof(pid_t), nullptr),
         "owner_tid/owner_pid must be lock-free for cross-process shared-memory use");
+#endif  // _WIN32
 
     // Closes the mutex, doesn't remove the backing mutex file.
     void close_mutex() noexcept;
@@ -106,11 +114,19 @@ private:
     // Sets owner TID/PID to the calling thread and annotates for TSAN.
     void record_acquisition();
 
+#ifndef _WIN32
     // Used for critical section needed during initialization.
     static pthread_mutex_t multithread_mutex_;
+#endif
 
     int shm_fd_ = -1;
+#ifndef _WIN32
     pthread_mutex_wrapper* mutex_wrapper_ptr_ = nullptr;
+#else
+    // HANDLE of the named Windows mutex backing this lock (void* to keep windows.h out of this
+    // header). Named mutexes are natively robust: a crashed owner surfaces as WAIT_ABANDONED.
+    void* win_mutex_ = nullptr;
+#endif
     std::string mutex_name_;
 
     // How many times this object currently holds the lock for a thread in this process.
