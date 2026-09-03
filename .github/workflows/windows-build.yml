@@ -20,19 +20,30 @@ jobs:
           submodules: recursive
 
       - name: Environment info
+        id: env_info
         shell: pwsh
         run: |
           cmake --version
           Get-Command cmake | Format-List
-          $vsPath = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+          $vsPath = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -property installationPath
           Write-Host "vswhere installationPath: $vsPath"
+          "vs_path=$vsPath" >> $env:GITHUB_OUTPUT
 
       - name: Configure (windows-msvc preset)
         id: configure
         shell: pwsh
         continue-on-error: true
+        env:
+          VS_PATH: ${{ steps.env_info.outputs.vs_path }}
         run: |
-          cmake --preset windows-msvc -DTT_UMD_BUILD_TESTS=ON 2>&1 | Tee-Object -FilePath configure.log
+          # CMake's "Visual Studio 17 2022" generator sometimes fails to auto-detect the VS
+          # instance on GitHub-hosted windows-latest runners ("could not find any instance of
+          # Visual Studio"). Pin it explicitly via vswhere's installationPath as a fallback.
+          $extra = @()
+          if ($env:VS_PATH) {
+            $extra += "-DCMAKE_GENERATOR_INSTANCE:PATH=$env:VS_PATH"
+          }
+          cmake --preset windows-msvc -DTT_UMD_BUILD_TESTS=ON @extra 2>&1 | Tee-Object -FilePath configure.log
           exit $LASTEXITCODE
 
       - name: Report configure failure
