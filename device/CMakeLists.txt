@@ -52,8 +52,14 @@ set_target_properties(
             ${CMAKE_PROJECT_VERSION_MAJOR}
 )
 
-# Enable unity builds for faster compilation 
-# Note: Requires TT_ENABLE_UNITY_BUILD function from parent project 
+if(MSVC)
+    # tt-logger's public logging macros use __VA_OPT__, which MSVC only supports with the
+    # conformant preprocessor. PUBLIC so that consumers of UMD's headers get it too.
+    target_compile_options(tt-umd PUBLIC /Zc:preprocessor)
+endif()
+
+# Enable unity builds for faster compilation
+# Note: Requires TT_ENABLE_UNITY_BUILD function from parent project
 if(COMMAND TT_ENABLE_UNITY_BUILD)
     tt_enable_unity_build(tt-umd)
 endif()
@@ -131,7 +137,6 @@ target_sources(
         warm_reset_with_recovery.cpp
         types/xy_pair.cpp
         utils/lock_manager.cpp
-        utils/robust_mutex.cpp
         utils/kmd_mutex.cpp
         topology/topology_discovery.cpp
         topology/topology_discovery_blackhole.cpp
@@ -152,6 +157,22 @@ target_sources(
         # FlatBuffers), so it is always built and unit-tested in the same no-card baremetal lane.
         simulation/simulation_server_transport.cpp
 )
+
+if(NOT WIN32)
+    # utils/robust_mutex.cpp is POSIX (pthread + shared memory); the Windows implementation is a
+    # named kernel mutex, in a separate source file (robust_mutex_windows.cpp) so windows.h stays
+    # out of this translation unit's neighbors.
+    target_sources(tt-umd PRIVATE utils/robust_mutex.cpp)
+else()
+    target_sources(
+        tt-umd
+        PRIVATE
+            utils/robust_mutex_windows.cpp
+            # get_stacktrace()'s Windows implementation; kept out of the public error_detail.hpp
+            # header so windows.h/dbghelp.h don't leak into consumers (see that header).
+            utils/stacktrace_windows.cpp
+    )
+endif()
 
 if(TT_UMD_BUILD_SIMULATION)
     target_sources(
