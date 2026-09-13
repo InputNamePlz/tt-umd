@@ -151,6 +151,10 @@ set(TT_X86_MARCH "x86-64-v3" CACHE STRING "x86_64 architecture passed to -march"
 
 if(MSVC)
     add_compile_options(/W3)
+    # windows.h's min/max macros break every std::min/std::max call site that ends up in a TU
+    # that includes it (transitively or not); NOMINMAX is the standard opt-out. WIN32_LEAN_AND_MEAN
+    # trims windows.h to the core subset, avoiding winsock.h/winsock2.h ordering conflicts.
+    add_compile_definitions(NOMINMAX WIN32_LEAN_AND_MEAN)
 else()
     add_compile_options(
         "$<$<STREQUAL:${CMAKE_SYSTEM_PROCESSOR},x86_64>:-march=${TT_X86_MARCH}>"
