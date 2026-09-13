@@ -85,7 +85,23 @@ jobs:
         if: steps.build.outcome == 'failure'
         shell: pwsh
         run: |
-          $lines = Get-Content build.log -Tail 80
+          # Ninja runs many object files in parallel, so the actual compiler error for the file
+          # that failed is often scrolled off by unrelated warnings from files that finished
+          # compiling afterwards. Grep for real MSVC diagnostics (": error C####:") plus a few
+          # lines of surrounding context first; only fall back to a plain tail if none are found.
+          $all = Get-Content build.log
+          $errorLines = $all | Select-String -Pattern ': error [A-Z]+\d+:'
+          if ($errorLines) {
+            $lines = @()
+            foreach ($m in $errorLines) {
+              $start = [Math]::Max(0, $m.LineNumber - 3)
+              $end = [Math]::Min($all.Count - 1, $m.LineNumber + 1)
+              $lines += $all[$start..$end]
+              $lines += ""
+            }
+          } else {
+            $lines = Get-Content build.log -Tail 80
+          }
           foreach ($line in $lines) {
             $escaped = $line -replace '%','%25' -replace "`r",'%0D' -replace "`n",'%0A'
             Write-Host "::error::$escaped"
