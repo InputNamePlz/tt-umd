@@ -7,6 +7,14 @@
 #include <fmt/ranges.h>
 #ifndef _WIN32
 #include <unistd.h>
+#else
+#include <windows.h>  // for GetComputerNameA
+// winbase.h defines IGNORE as an object-like macro, which mangles any enumerator named IGNORE
+// (e.g. TopologyDiscoveryOptions::Action::IGNORE) in a TU that includes this header afterwards.
+// The macro is a Win16-era relic with no modern users; drop it every time windows.h comes in.
+#ifdef IGNORE
+#undef IGNORE
+#endif
 #endif
 
 #include <array>
@@ -218,10 +226,20 @@ inline std::optional<std::string> resolve_cluster_id(const std::optional<std::st
     }
 
     std::array<char, 256> hostname = {};
+#ifdef _WIN32
+    // gethostname() is a Winsock call requiring WSAStartup; GetComputerNameA is the plain Win32
+    // equivalent (NetBIOS name, no sockets library needed).
+    DWORD hostname_size = static_cast<DWORD>(hostname.size() - 1);
+    if (!GetComputerNameA(hostname.data(), &hostname_size)) {
+        log_warning(LogUMD, "GetComputerNameA() failed, leaving the cluster id unset. Pass one in {}.", SOURCE);
+        return std::nullopt;
+    }
+#else
     if (gethostname(hostname.data(), hostname.size() - 1) != 0) {
         log_warning(LogUMD, "gethostname() failed, leaving the cluster id unset. Pass one in {}.", SOURCE);
         return std::nullopt;
     }
+#endif
 
     // Stored raw, with no FQDN stripping -- consumers canonicalize.
     std::string cluster_id(hostname.data());
