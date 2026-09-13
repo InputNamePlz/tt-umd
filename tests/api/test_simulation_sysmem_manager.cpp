@@ -329,7 +329,15 @@ TEST(ApiSimulationSysmemManager, AllocatedBufferFreesBackingMemory) {
         GTEST_SKIP() << "Could not read VmRSS from /proc/self/status.";
     }
 
+#ifdef _WIN32
+    // Windows x64 pages are always 4 KiB (VirtualAlloc granularity is larger, but page protection
+    // and demand-zeroing work at page size). This branch never runs at runtime -- read_rss_kib()
+    // reads /proc/self/status, so rss_before is always 0 on Windows and the GTEST_SKIP above fires
+    // first -- but the file still has to compile.
+    const size_t page_size = 4096;
+#else
     const size_t page_size = static_cast<size_t>(sysconf(_SC_PAGESIZE));
+#endif
     for (int i = 0; i < iterations; i++) {
         std::unique_ptr<SysmemBuffer> buffer = sysmem->allocate_sysmem_buffer(buf_size);
         ASSERT_NE(buffer, nullptr);
