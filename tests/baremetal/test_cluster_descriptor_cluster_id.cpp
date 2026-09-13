@@ -3,7 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
+#ifndef _WIN32
 #include <unistd.h>
+#else
+#include <windows.h>  // for GetComputerNameA
+#endif
 
 #include <array>
 #include <fstream>
@@ -44,9 +48,16 @@ std::string with_cluster_id(const std::string& cluster_desc_content, const std::
 // characters).
 std::optional<std::string> local_os_hostname_as_cluster_id() {
     std::array<char, 256> hostname = {};
+#ifdef _WIN32
+    DWORD hostname_size = static_cast<DWORD>(hostname.size() - 1);
+    if (!GetComputerNameA(hostname.data(), &hostname_size)) {
+        return std::nullopt;
+    }
+#else
     if (gethostname(hostname.data(), hostname.size() - 1) != 0) {
         return std::nullopt;
     }
+#endif
     std::string os_hostname(hostname.data());
     if (utils::get_cluster_id_error(os_hostname).has_value()) {
         return std::nullopt;
