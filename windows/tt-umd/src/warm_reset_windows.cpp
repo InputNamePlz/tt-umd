@@ -19,9 +19,9 @@
 #include <vector>
 
 #include "tt-kmd-lib/tt_kmd_lib.h"
-#include "umd/device/pcie/pci_device.hpp"
-#include "umd/device/utils/error.hpp"
-#include "umd/device/warm_reset.hpp"
+#include "tt-umd/pcie/pci_device.hpp"
+#include "tt-umd/utils/error.hpp"
+#include "tt-umd/warm_reset.hpp"
 
 namespace tt::umd {
 
@@ -110,6 +110,12 @@ bool WarmReset::warm_reset_pci_bdfs(
 bool WarmReset::ubb_warm_reset(const std::chrono::milliseconds /*timeout_ms*/) {
     // UBB (Galaxy) hardware is not supported on Windows.
     throw_not_supported();
+}
+
+bool WarmReset::warm_reset_sysfs(std::vector<int> /*pci_device_ids*/) {
+    // Remove-and-rescan through sysfs is Linux-only; the API reports "unsupported" with false.
+    log_warning(tt::LogUMD, "warm_reset_sysfs is not supported on Windows.");
+    return false;
 }
 
 bool WarmResetCommunication::Monitor::start_monitoring(

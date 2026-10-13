@@ -2,22 +2,25 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Windows implementation of the stack capture behind UmdException, kept out of the public
-// error_detail.hpp header so that windows.h and dbghelp.h do not leak into consumers.
+// Backend of windows/compat/public/execinfo.h: the stack capture behind UmdException
+// (error::get_stacktrace() in error_detail.hpp calls backtrace() and backtrace_symbols()).
 
 #include <windows.h>
 
 #include <dbghelp.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include <mutex>
 #include <string>
 #include <vector>
 
-#pragma comment(lib, "dbghelp.lib")
+#include "execinfo.h"
 
-namespace tt::umd::error {
+#pragma comment(lib, "dbghelp.lib")
 
 namespace {
 
@@ -88,21 +91,52 @@ std::string describe_frame(void* address) {
 
 }  // namespace
 
-std::vector<std::string> capture_stacktrace_windows(uint32_t max_frames, uint32_t skip) {
-    std::vector<std::string> stack_frames;
-    if (max_frames == 0 || max_frames > 1024 || skip >= max_frames) {
-        return stack_frames;
+int tt_umd_win_backtrace(void** buffer, int size) {
+    if (buffer == nullptr || size <= 0) {
+        return 0;
     }
-
-    std::vector<void*> addresses(max_frames);
-    // +1/-1: skip this function's own frame on top of the frames the caller asked to skip.
-    const USHORT captured = CaptureStackBackTrace(skip + 1, max_frames - skip, addresses.data(), nullptr);
-
-    std::lock_guard<std::mutex> lock(sym_mutex());
-    for (USHORT i = 0; i < captured; ++i) {
-        stack_frames.push_back(describe_frame(addresses[i]));
+    // Skip this frame, so that like glibc's backtrace() the first entry is the caller's frame.
+    // CaptureStackBackTrace takes at most 62 frames on older Windows versions; capture in chunks.
+    int captured = 0;
+    while (captured < size) {
+        const ULONG chunk = static_cast<ULONG>(std::min(size - captured, 62));
+        const USHORT got = CaptureStackBackTrace(1 + static_cast<ULONG>(captured), chunk, buffer + captured, nullptr);
+        captured += got;
+        if (got < chunk) {
+            break;
+        }
     }
-    return stack_frames;
+    return captured;
 }
 
-}  // namespace tt::umd::error
+char** tt_umd_win_backtrace_symbols(void* const* buffer, int size) {
+    if (buffer == nullptr || size <= 0) {
+        return nullptr;
+    }
+    std::vector<std::string> frames;
+    frames.reserve(size);
+    {
+        std::lock_guard<std::mutex> lock(sym_mutex());
+        for (int i = 0; i < size; ++i) {
+            frames.push_back(describe_frame(buffer[i]));
+        }
+    }
+
+    // One allocation holding the pointer array followed by the strings, released with a single
+    // free() by the caller (glibc contract).
+    size_t total = sizeof(char*) * static_cast<size_t>(size);
+    for (const std::string& frame : frames) {
+        total += frame.size() + 1;
+    }
+    char** result = static_cast<char**>(std::malloc(total));
+    if (result == nullptr) {
+        return nullptr;
+    }
+    char* strings = reinterpret_cast<char*>(result + size);
+    for (int i = 0; i < size; ++i) {
+        result[i] = strings;
+        std::memcpy(strings, frames[i].c_str(), frames[i].size() + 1);
+        strings += frames[i].size() + 1;
+    }
+    return result;
+}

@@ -17,7 +17,7 @@
 //  - DMA (pin pages / DMA buffers), reset, power state and sysfs-derived attributes are not
 //    supported by the driver yet; those entry points throw. numa_node is -1 and revision 0.
 
-#include "umd/device/pcie/pci_device.hpp"
+#include "tt-umd/pcie/pci_device.hpp"
 
 #include <fmt/format.h>
 
@@ -34,8 +34,8 @@
 #include "tt-kmd-lib/pci_ids.h"
 #include "tt-kmd-lib/tt_kmd_lib.h"
 #include "tt-kmd-lib/tt_kmd_lib_windows.h"
-#include "umd/device/pcie/silicon_tlb_handle.hpp"
-#include "umd/device/utils/error.hpp"
+#include "tt-umd/pcie/silicon_tlb_handle.hpp"
+#include "tt-umd/utils/error.hpp"
 
 namespace tt::umd {
 
@@ -56,6 +56,8 @@ tt::ARCH PciDeviceInfo::get_arch() const {
         return tt::ARCH::WORMHOLE_B0;
     } else if (this->device_id == TT_BLACKHOLE_PCI_DEVICE_ID) {
         return tt::ARCH::BLACKHOLE;
+    } else if (this->device_id == TT_QUASAR_PCI_DEVICE_ID) {
+        return tt::ARCH::QUASAR;
     }
     return tt::ARCH::Invalid;
 }
@@ -217,6 +219,10 @@ PciDeviceInfo PCIDevice::read_device_info(const std::string &device_path) {
 // tt-wind does not put the host behind an IOMMU on the device's behalf; DMA remapping status is
 // not queryable from user mode here yet.
 bool PCIDevice::detect_iommu(const PciDeviceInfo & /*device_info*/) { return false; }
+
+// The driver does not report the negotiated link width yet ("can't be determined" per the API).
+// The PnP property DEVPKEY_PciDevice_CurrentLinkWidth of the device node would provide it.
+std::optional<uint32_t> PCIDevice::get_current_link_width() const { return std::nullopt; }
 
 PCIDevice::PCIDevice(int pci_device_number) :
     device_path(std::to_string(pci_device_number)),

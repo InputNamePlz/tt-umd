@@ -18,7 +18,7 @@
 // hugepages installed: init logs an actionable warning and leaves no channels, so callers see
 // get_num_host_mem_channels() == 0 and sysmem accesses fail with a readable error.
 
-#include "umd/device/chip_helpers/silicon_sysmem_manager.hpp"
+#include "tt-umd/chip_helpers/silicon_sysmem_manager.hpp"
 
 #include <fmt/format.h>
 
@@ -29,9 +29,9 @@
 #include "hugepage.hpp"  // MAX_HOST_MEM_CHANNELS
 #include "tt-kmd-lib/tt_kmd_lib.h"
 #include "tt-kmd-lib/tt_kmd_lib_windows.h"
-#include "umd/device/pcie/pci_device.hpp"
-#include "umd/device/tt_device/tt_device.hpp"
-#include "umd/device/utils/error.hpp"
+#include "tt-umd/pcie/pci_device.hpp"
+#include "tt-umd/tt_device/tt_device.hpp"
+#include "tt-umd/utils/error.hpp"
 
 namespace tt::umd {
 
