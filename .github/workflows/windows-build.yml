@@ -71,25 +71,23 @@ jobs:
         if: steps.build.outcome == 'failure'
         shell: pwsh
         run: |
-          # Ninja runs many object files in parallel, so the actual compiler error for the file
-          # that failed is often scrolled off by unrelated warnings from files that finished
-          # compiling afterwards. Grep for real MSVC diagnostics (": error C####:") plus a few
-          # lines of surrounding context first; only fall back to a plain tail if none are found.
-          $all = Get-Content build.log
-          $errorLines = $all | Select-String -Pattern ': error [A-Z]+\d+:'
-          if ($errorLines) {
-            $lines = @()
-            foreach ($m in $errorLines) {
-              $start = [Math]::Max(0, $m.LineNumber - 3)
-              $end = [Math]::Min($all.Count - 1, $m.LineNumber + 1)
-              $lines += $all[$start..$end]
-              $lines += ""
-            }
-          } else {
-            $lines = Get-Content build.log -Tail 80
+          # Ninja runs many object files in parallel, so the failing command's diagnostics are
+          # often scrolled off by output from files that finished afterwards. GitHub keeps only 10
+          # error annotations per step, so emit one multi-line annotation per failure: the
+          # "FAILED:" edge or MSVC diagnostic plus the lines after it. Fall back to the log tail.
+          $all = @(Get-Content build.log)
+          $hits = $all | Select-String -Pattern '^FAILED: |(fatal )?error [A-Z]+\d+:|^ninja: error'
+          $blocks = @()
+          foreach ($m in ($hits | Select-Object -First 10)) {
+            $start = $m.LineNumber - 1
+            $end = [Math]::Min($all.Count - 1, $start + 6)
+            $blocks += ,(($all[$start..$end] | ForEach-Object { $_.Substring(0, [Math]::Min(400, $_.Length)) }) -join "`n")
           }
-          foreach ($line in $lines) {
-            $escaped = $line -replace '%','%25' -replace "`r",'%0D' -replace "`n",'%0A'
+          if ($blocks.Count -eq 0) {
+            $blocks = @((Get-Content build.log -Tail 40) -join "`n")
+          }
+          foreach ($block in $blocks) {
+            $escaped = $block -replace '%','%25' -replace "`r",'%0D' -replace "`n",'%0A'
             Write-Host "::error::$escaped"
           }
           exit 1
