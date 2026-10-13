@@ -1000,6 +1000,43 @@ int tt_unpin_pages(tt_device_t* dev, void* addr, size_t len) {
     return -ENOSYS;
 }
 
+/* Kernel-performed scalar NOC access (the Quasar access path). tt-wind has no such ioctl, so valid
+ * requests return -ENOSYS; malformed ones are rejected with -EINVAL by the same rules as the Linux
+ * backend, which is what callers (and tests/baremetal/test_kmd_lib_noc_io.cpp) rely on. */
+static int validate_scalar_noc_access(const tt_device_t* dev, uint64_t addr, uint32_t width, uint32_t flags) {
+    /* The inbound translation table's target-address field is 52 bits wide. */
+    const uint64_t address_limit = (uint64_t)1 << 52;
+
+    if (width != 1 && width != 2 && width != 4 && width != 8) {
+        return -EINVAL;
+    }
+    if (addr % width != 0 || addr > address_limit - width) {
+        return -EINVAL;
+    }
+    if ((flags & ~(uint32_t)TT_NOC_FLAG_KLA) != 0) {
+        return -EINVAL;
+    }
+    if (dev == NULL) {
+        return -EINVAL;
+    }
+    return 0;
+}
+
+int tt_noc_read_scalar(tt_device_t* dev, uint64_t addr, uint64_t* value, uint32_t width, uint32_t flags) {
+    if (value == NULL) {
+        return -EINVAL;
+    }
+    *value = 0;
+    int ret = validate_scalar_noc_access(dev, addr, width, flags);
+    return ret != 0 ? ret : -ENOSYS;
+}
+
+int tt_noc_write_scalar(tt_device_t* dev, uint64_t addr, uint64_t value, uint32_t width, uint32_t flags) {
+    (void)value;
+    int ret = validate_scalar_noc_access(dev, addr, width, flags);
+    return ret != 0 ? ret : -ENOSYS;
+}
+
 int tt_allocate_dma_buf(
     tt_device_t* dev,
     uint8_t buf_index,
