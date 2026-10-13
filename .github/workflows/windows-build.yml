@@ -1,13 +1,12 @@
 name: Windows build (host-only)
 
-# Best-effort Windows CI: configures and builds tt-umd with MSVC, reproducing
-# the windows-msvc CMake preset's cache variables, then runs the host-only
-# test binaries (no Tenstorrent hardware present on GitHub-hosted runners).
-# See the Configure step for why it doesn't invoke the preset directly.
+# Best-effort Windows CI: configures and builds tt-umd with MSVC through the fork's
+# Windows overlay (windows/cmake/msvc-cache.cmake), then runs the host-only test
+# binaries (no Tenstorrent hardware present on GitHub-hosted runners).
 on:
   push:
     branches:
-      - windows
+      - windows-v2
   workflow_dispatch:
 
 jobs:
@@ -35,30 +34,17 @@ jobs:
         with:
           arch: x64
 
-      - name: Configure (windows-msvc preset settings, Ninja generator)
+      - name: Configure (Windows overlay, Ninja generator)
         id: configure
         shell: pwsh
         continue-on-error: true
         run: |
-          # The repo's windows-msvc CMake preset targets the "Visual Studio 17 2022" generator,
-          # which matches the local Windows dev machine this fork is built on. GitHub's
-          # windows-latest runner has since moved to a newer Visual Studio (product version 18)
-          # that CMake doesn't recognize under that generator name ("could not find any instance
-          # of Visual Studio" / "could not find specified instance"), so the VS generator can't
-          # be used here. Reproduce the preset's cache variables with the Ninja generator instead
-          # (cl.exe/link.exe from ilammy/msvc-dev-cmd on PATH), keeping the same binary dir so the
-          # rest of this job matches a local windows-msvc build as closely as possible.
+          # The initial-cache file turns on the overlay (CMAKE_PROJECT_umd_INCLUDE) and sets the
+          # supported options; no upstream CMake file is edited. Ninja with cl.exe/link.exe from
+          # ilammy/msvc-dev-cmd, so the job does not depend on the runner's Visual Studio version.
           cmake -S . -B .build/windows-msvc -G Ninja `
-            -DCMAKE_BUILD_TYPE=Release `
-            -DTT_UMD_BUILD_STATIC=ON `
-            -DTT_UMD_BUILD_TOOLS=OFF `
+            -C windows/cmake/msvc-cache.cmake `
             -DTT_UMD_BUILD_TESTS=ON `
-            -DTT_UMD_BUILD_SIMULATION=OFF `
-            -DTT_UMD_BUILD_PYTHON=OFF `
-            -DTT_UMD_BUILD_EXAMPLES=OFF `
-            -DTT_UMD_BUILD_JTAG=OFF `
-            -DTT_UMD_ENABLE_CLANG_TIDY=OFF `
-            -DCMAKE_COMPILE_WARNING_AS_ERROR=OFF `
             2>&1 | Tee-Object -FilePath configure.log
           exit $LASTEXITCODE
 
@@ -108,10 +94,21 @@ jobs:
           }
           exit 1
 
+      - name: Test filter (windows/tests/gtest_exclude.txt)
+        id: filter
+        shell: bash
+        run: |
+          patterns=$(grep -v '^\s*#' windows/tests/gtest_exclude.txt | tr -d '\r' | grep -v '^\s*$' | paste -sd: -)
+          echo "gtest_filter=-${patterns}" >> "$GITHUB_OUTPUT"
+
       - name: Run umd_misc_tests (host-only)
-        run: .build/windows-msvc/test/umd/misc/umd_misc_tests.exe
+        run: .build/windows-msvc/test/umd/misc/umd_misc_tests.exe --gtest_filter="${{ steps.filter.outputs.gtest_filter }}"
         shell: bash
 
       - name: Run baremetal_tests (host-only)
-        run: .build/windows-msvc/test/umd/baremetal/baremetal_tests.exe
+        run: .build/windows-msvc/test/umd/baremetal/baremetal_tests.exe --gtest_filter="${{ steps.filter.outputs.gtest_filter }}"
+        shell: bash
+
+      - name: Run api_tests simulation-sysmem subset (host-only)
+        run: .build/windows-msvc/test/umd/api/api_tests.exe --gtest_filter="ApiSimulationSysmemManager.*"
         shell: bash
