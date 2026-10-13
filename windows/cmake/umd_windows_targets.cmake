@@ -249,6 +249,16 @@ if(TT_UMD_BUILD_TESTS)
         test_utils_tests
     )
 
+    # googletest is added through CPM as "GTest", and FetchContent lowercases that to "gtest",
+    # which shadows the googletest project's own gtest_SOURCE_DIR inside googlemock's scope. On a
+    # fresh fetch, gmock's sources then miss the googletest include directories (MSVC builds gmock
+    # from gtest-all.cc directly). Point gmock back at the real googletest tree.
+    tt_win_require_targets(gtest gmock gmock_main)
+    get_target_property(_googletest_dir gtest SOURCE_DIR)
+    foreach(_target IN ITEMS gmock gmock_main)
+        target_include_directories(${_target} PRIVATE "${_googletest_dir}/include" "${_googletest_dir}")
+    endforeach()
+
     tt_win_remove_link_items(test_common pthread)
     target_include_directories(test_common BEFORE INTERFACE "${_win_root}/compat/private" "${_win_root}/tests/compat")
     target_compile_options(test_common INTERFACE "$<$<COMPILE_LANGUAGE:CXX>:/FI${_win_root}/tests/test_prelude.h>")
