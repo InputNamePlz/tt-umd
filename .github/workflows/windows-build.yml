@@ -1,0 +1,117 @@
+name: Windows build (host-only)
+
+# Best-effort Windows CI: configures and builds tt-umd with MSVC, reproducing
+# the windows-msvc CMake preset's cache variables, then runs the host-only
+# test binaries (no Tenstorrent hardware present on GitHub-hosted runners).
+# See the Configure step for why it doesn't invoke the preset directly.
+on:
+  push:
+    branches:
+      - windows
+  workflow_dispatch:
+
+jobs:
+  windows-msvc-build:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Environment info
+        id: env_info
+        shell: pwsh
+        run: |
+          cmake --version
+          Get-Command cmake | Format-List
+          $vsPath = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -property installationPath
+          Write-Host "vswhere installationPath: $vsPath"
+          "vs_path=$vsPath" >> $env:GITHUB_OUTPUT
+
+      - name: Setup MSVC dev environment
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Configure (windows-msvc preset settings, Ninja generator)
+        id: configure
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          # The repo's windows-msvc CMake preset targets the "Visual Studio 17 2022" generator,
+          # which matches the local Windows dev machine this fork is built on. GitHub's
+          # windows-latest runner has since moved to a newer Visual Studio (product version 18)
+          # that CMake doesn't recognize under that generator name ("could not find any instance
+          # of Visual Studio" / "could not find specified instance"), so the VS generator can't
+          # be used here. Reproduce the preset's cache variables with the Ninja generator instead
+          # (cl.exe/link.exe from ilammy/msvc-dev-cmd on PATH), keeping the same binary dir so the
+          # rest of this job matches a local windows-msvc build as closely as possible.
+          cmake -S . -B .build/windows-msvc -G Ninja `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DTT_UMD_BUILD_STATIC=ON `
+            -DTT_UMD_BUILD_TOOLS=OFF `
+            -DTT_UMD_BUILD_TESTS=ON `
+            -DTT_UMD_BUILD_SIMULATION=OFF `
+            -DTT_UMD_BUILD_PYTHON=OFF `
+            -DTT_UMD_BUILD_EXAMPLES=OFF `
+            -DTT_UMD_BUILD_JTAG=OFF `
+            -DTT_UMD_ENABLE_CLANG_TIDY=OFF `
+            -DCMAKE_COMPILE_WARNING_AS_ERROR=OFF `
+            2>&1 | Tee-Object -FilePath configure.log
+          exit $LASTEXITCODE
+
+      - name: Report configure failure
+        if: steps.configure.outcome == 'failure'
+        shell: pwsh
+        run: |
+          $lines = Get-Content configure.log -Tail 60
+          foreach ($line in $lines) {
+            $escaped = $line -replace '%','%25' -replace "`r",'%0D' -replace "`n",'%0A'
+            Write-Host "::error::$escaped"
+          }
+          exit 1
+
+      - name: Build (Release)
+        id: build
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          cmake --build .build/windows-msvc 2>&1 | Tee-Object -FilePath build.log
+          exit $LASTEXITCODE
+
+      - name: Report build failure
+        if: steps.build.outcome == 'failure'
+        shell: pwsh
+        run: |
+          # Ninja runs many object files in parallel, so the actual compiler error for the file
+          # that failed is often scrolled off by unrelated warnings from files that finished
+          # compiling afterwards. Grep for real MSVC diagnostics (": error C####:") plus a few
+          # lines of surrounding context first; only fall back to a plain tail if none are found.
+          $all = Get-Content build.log
+          $errorLines = $all | Select-String -Pattern ': error [A-Z]+\d+:'
+          if ($errorLines) {
+            $lines = @()
+            foreach ($m in $errorLines) {
+              $start = [Math]::Max(0, $m.LineNumber - 3)
+              $end = [Math]::Min($all.Count - 1, $m.LineNumber + 1)
+              $lines += $all[$start..$end]
+              $lines += ""
+            }
+          } else {
+            $lines = Get-Content build.log -Tail 80
+          }
+          foreach ($line in $lines) {
+            $escaped = $line -replace '%','%25' -replace "`r",'%0D' -replace "`n",'%0A'
+            Write-Host "::error::$escaped"
+          }
+          exit 1
+
+      - name: Run umd_misc_tests (host-only)
+        run: .build/windows-msvc/test/umd/misc/umd_misc_tests.exe
+        shell: bash
+
+      - name: Run baremetal_tests (host-only)
+        run: .build/windows-msvc/test/umd/baremetal/baremetal_tests.exe
+        shell: bash
