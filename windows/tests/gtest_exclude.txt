@@ -1,0 +1,9 @@
+# Upstream test cases that cannot hold on Windows because of a platform semantic difference rather
+# than a bug. One gtest pattern per line; '#' starts a comment. Pass them on as a negative filter:
+#   --gtest_filter=-<pattern1>:<pattern2>:...
+# (CI builds that string from this file; see .github/workflows/windows-build.yml.)
+
+# Windows cannot hold an environment variable with an empty value (_putenv_s/SetEnvironmentVariable
+# delete it), so the "TT_VISIBLE_DEVICES set but empty = no devices" combination reads as "unset =
+# all devices". Hardware test (api_tests).
+TestTTVisibleDevices.OpenChipsByBDF
