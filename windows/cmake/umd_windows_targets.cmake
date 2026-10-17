@@ -112,8 +112,10 @@ endfunction()
 # CMakeLists.txt and to gtest. cl.exe would read -Wall as /Wall (every off-by-default warning) and
 # ignore the rest with D9002 noise. -march=... is a generator expression that is false for AMD64,
 # and -w is understood by cl.exe, so both stay.
+# Only UMD's own directory tree is walked (PROJECT_SOURCE_DIR of project(umd), not
+# CMAKE_SOURCE_DIR), so a parent project that adds UMD with add_subdirectory() keeps its flags.
 function(tt_win_strip_gnu_warning_flags)
-    tt_win_collect_targets("${CMAKE_SOURCE_DIR}" _targets)
+    tt_win_collect_targets("${_umd_root}" _targets)
     foreach(_target IN LISTS _targets)
         get_target_property(_imported ${_target} IMPORTED)
         if(_imported)
