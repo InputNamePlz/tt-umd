@@ -18,9 +18,11 @@ cmake --build .build/windows-msvc
 .build\windows-msvc\test\umd\baremetal\baremetal_tests.exe
 ```
 
-A parent project that adds UMD with `add_subdirectory()` sets
-`CMAKE_PROJECT_umd_INCLUDE=<umd>/windows/cmake/umd_windows.cmake` (and the options in
-`msvc-cache.cmake`) instead.
+A parent project that adds UMD with `add_subdirectory()` (any generator, including Visual Studio) sets
+`CMAKE_PROJECT_umd_INCLUDE=<umd>/windows/cmake/umd_windows.cmake` and `TT_UMD_BUILD_TOOLS=OFF` (plus
+`TT_UMD_BUILD_STATIC=ON`, `TT_UMD_BUILD_SIMULATION=OFF`) instead of using the whole initial cache, which
+would also set `CMAKE_BUILD_TYPE` for the parent. The overlay only changes UMD's own directory tree and
+targets; consumers of `umd::tt-umd` get no `<windows.h>` and none of its macros.
 
 ## How it is wired
 

@@ -18,8 +18,17 @@ endif()
 get_filename_component(TT_WIN_ROOT "${CMAKE_CURRENT_LIST_DIR}/.." ABSOLUTE)
 set(TT_WIN_ROOT "${TT_WIN_ROOT}" CACHE INTERNAL "Root of the tt-umd Windows overlay")
 
+# Everything below is directory-scoped: this file runs in the scope of the directory that called
+# project(umd), so it reaches UMD and its subdirectories but never the targets of a parent project
+# that adds UMD with add_subdirectory(). No cache entries, global properties or CMAKE_*_FLAGS are
+# changed here.
+
 # /W3 instead of the GCC warning flags upstream adds (those are stripped per target later).
 add_compile_options(/W3)
+# MSVC warnings differ from the GCC/Clang set upstream keeps clean, and upstream's root
+# CMakeLists.txt turns warnings into errors unless CMAKE_COMPILE_WARNING_AS_ERROR is defined. A
+# normal (directory) variable, so a parent project's own setting is left alone.
+set(CMAKE_COMPILE_WARNING_AS_ERROR OFF)
 # windows.h's min/max macros break std::min/std::max; WIN32_LEAN_AND_MEAN keeps winsock.h out so
 # that asio's winsock2.h does not conflict with it.
 add_compile_definitions(
