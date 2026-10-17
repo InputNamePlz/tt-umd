@@ -203,10 +203,15 @@ target_include_directories(
 # Designated initializers in public headers need C++20 on MSVC; tt-logger's macros use __VA_OPT__,
 # which needs the conforming preprocessor. Both PUBLIC, as consumers compile those headers too.
 target_compile_features(tt-umd PUBLIC cxx_std_20)
+target_compile_options(tt-umd PUBLIC "$<$<COMPILE_LANGUAGE:CXX>:/Zc:preprocessor>")
+# Forced includes: consumers get only the header-free public prelude (pid_t,
+# __atomic_always_lock_free); tt-umd's own sources get the private one, which adds <windows.h>
+# (whose IN/OUT/ERROR/... macros must not reach consumer code) on top of it.
 target_compile_options(
     tt-umd
-    PUBLIC
-        "$<$<COMPILE_LANGUAGE:CXX>:/Zc:preprocessor>"
+    PRIVATE
+        "$<$<COMPILE_LANGUAGE:CXX>:/FI${_win_root}/private/tt_umd_windows_private_prelude.h>"
+    INTERFACE
         "$<$<COMPILE_LANGUAGE:CXX>:/FI${_win_root}/include/tt_umd_windows_prelude.h>"
 )
 
@@ -223,15 +228,15 @@ set_source_files_properties(
     TARGET_DIRECTORY tt-umd
     PROPERTIES
         COMPILE_OPTIONS
-            "/FI${_win_root}/include/tt_umd_windows_gnu_attributes.h"
+            "/FI${_win_root}/private/tt_umd_windows_gnu_attributes.h"
 )
-# The SIGBUS guard: see windows/include/tt_umd_windows_sigbus.h.
+# The SIGBUS guard: see windows/private/tt_umd_windows_sigbus.h.
 set_source_files_properties(
     "${_umd_source_dir}/src/pcie/silicon_tlb_window.cpp"
     TARGET_DIRECTORY tt-umd
     PROPERTIES
         COMPILE_OPTIONS
-            "/FI${_win_root}/include/tt_umd_windows_gnu_attributes.h;/FI${_win_root}/include/tt_umd_windows_sigbus.h"
+            "/FI${_win_root}/private/tt_umd_windows_gnu_attributes.h;/FI${_win_root}/private/tt_umd_windows_sigbus.h"
 )
 
 ####################################################################################################

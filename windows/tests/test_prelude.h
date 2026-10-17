@@ -10,7 +10,7 @@
 #include <cerrno>
 #include <cstdlib>
 
-#include "tt_umd_windows_prelude.h"
+#include "../private/tt_umd_windows_private_prelude.h"
 
 // setenv/unsetenv on top of _putenv_s, which getenv() observes. Windows cannot hold an environment
 // variable with an empty value: setenv(name, "", 1) removes the variable instead (see
