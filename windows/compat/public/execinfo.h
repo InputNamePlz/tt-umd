@@ -4,7 +4,7 @@
 
 // Windows stand-in for glibc's <execinfo.h>, used by tt-umd/utils/error_detail.hpp (public) to
 // attach stack traces to UmdException. Backed by CaptureStackBackTrace and dbghelp in
-// windows/tt-umd/src/utils/stacktrace_windows.cpp. backtrace_symbols() returns one malloc'd block
+// windows/tt-umd-utils/src/stacktrace_windows.cpp. backtrace_symbols() returns one malloc'd block
 // that the caller releases with free(), as with glibc. Entries read "module!symbol+0xoffset", or
 // "module+0xoffset" when no PDB is available.
 

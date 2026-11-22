@@ -23,7 +23,7 @@
 // HandleToLong/LongToHandle), so the mutex handle is kept in shm_fd_, the descriptor slot of the
 // Linux implementation, with -1 meaning "not open". The pthread members stay unused.
 
-#include "tt-umd/utils/robust_mutex.hpp"
+#include "tt-umd-utils/robust_mutex.hpp"
 
 #include <windows.h>
 
@@ -32,7 +32,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include <unordered_map>
 
-#include "tt-umd/utils/error.hpp"
+#include "tt-umd-utils/error.hpp"
 
 namespace tt::umd {
 

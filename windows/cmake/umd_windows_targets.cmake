@@ -26,13 +26,18 @@ function(tt_win_require_targets)
     endforeach()
 endfunction()
 
-# Removes upstream sources (paths relative to the target's source dir) from a target. Each one must
-# exist on disk and be listed on the target.
+# Removes upstream sources from a target. A relative path is taken relative to the target's source
+# dir; a source added from another directory (e.g. tt-umd-workload/tests adds to tests/ targets) is
+# given as an absolute path. Each one must exist on disk and be listed on the target.
 function(tt_win_remove_sources target)
     get_target_property(_source_dir ${target} SOURCE_DIR)
     get_target_property(_sources ${target} SOURCES)
     foreach(_relative IN LISTS ARGN)
-        set(_absolute "${_source_dir}/${_relative}")
+        if(IS_ABSOLUTE "${_relative}")
+            set(_absolute "${_relative}")
+        else()
+            set(_absolute "${_source_dir}/${_relative}")
+        endif()
         if(NOT EXISTS "${_absolute}")
             tt_win_fail("upstream source '${_absolute}' no longer exists; update the overlay for target '${target}'.")
         endif()
@@ -108,10 +113,11 @@ function(tt_win_collect_targets directory out_var)
     set(${out_var} ${_targets} PARENT_SCOPE)
 endfunction()
 
-# Upstream adds GCC/Clang warning flags (-Wall, -Wno-...) to every target from its root
-# CMakeLists.txt and to gtest. cl.exe would read -Wall as /Wall (every off-by-default warning) and
-# ignore the rest with D9002 noise. -march=... is a generator expression that is false for AMD64,
-# and -w is understood by cl.exe, so both stay.
+# Upstream adds GCC/Clang warning flags (-Wall, -Wno-...) and -fno-omit-frame-pointer to every
+# target from its root CMakeLists.txt, and warning flags to gtest. cl.exe would read -Wall as /Wall
+# (every off-by-default warning) and ignore the rest with D9002 noise; x64 MSVC code has no
+# frame-pointer option to map -fno-omit-frame-pointer to. -march=... is a generator expression that
+# is false for AMD64, and -w is understood by cl.exe, so both stay.
 # Only UMD's own directory tree is walked (PROJECT_SOURCE_DIR of project(umd), not
 # CMAKE_SOURCE_DIR), so a parent project that adds UMD with add_subdirectory() keeps its flags.
 function(tt_win_strip_gnu_warning_flags)
@@ -125,7 +131,7 @@ function(tt_win_strip_gnu_warning_flags)
             get_target_property(_options ${_target} ${_property})
             if(_options)
                 set(_filtered ${_options})
-                list(FILTER _filtered EXCLUDE REGEX "(^|:)-W")
+                list(FILTER _filtered EXCLUDE REGEX "(^|:)(-W|-fno-omit-frame-pointer)")
                 if(NOT _filtered STREQUAL _options)
                     set_property(TARGET ${_target} PROPERTY ${_property} ${_filtered})
                 endif()
@@ -156,70 +162,96 @@ target_include_directories(tt-kmd-lib PUBLIC "$<BUILD_INTERFACE:${_win_root}/tt-
 target_link_libraries(tt-kmd-lib PRIVATE cfgmgr32)
 
 ####################################################################################################
-# tt-umd
+# Shared settings for the UMD libraries
 ####################################################################################################
 
-tt_win_require_targets(tt-umd)
+# Applied to tt-umd-utils, tt-umd-base (the UMD core, an OBJECT library) and tt-umd (the workload
+# layer and the library consumers link, which links tt-umd-base publicly within the build).
+#  - Shadow headers and POSIX stand-ins come BEFORE upstream's api/ directories. compat/public is
+#    needed by consumers because upstream public headers include <execinfo.h>, <cxxabi.h> and
+#    <pthread.h>; compat/private (<unistd.h>, <sys/mman.h>) only by UMD's own sources and tests.
+#  - Designated initializers in public headers need C++20 on MSVC; tt-logger's macros use
+#    __VA_OPT__, which needs the conforming preprocessor. Both PUBLIC, as consumers compile those
+#    headers too.
+#  - Forced includes: consumers get only the header-free public prelude (pid_t,
+#    __atomic_always_lock_free); UMD's own sources get the private one, which adds <windows.h>
+#    (whose IN/OUT/ERROR/... macros must not reach consumer code) on top of it.
+function(tt_win_configure_umd_library target)
+    target_include_directories(
+        ${target}
+        BEFORE
+        PUBLIC
+            "$<BUILD_INTERFACE:${_win_root}/include>"
+            "$<BUILD_INTERFACE:${_win_root}/compat/public>"
+        PRIVATE
+            "${_win_root}/compat/private"
+    )
+    target_compile_features(${target} PUBLIC cxx_std_20)
+    target_compile_options(${target} PUBLIC "$<$<COMPILE_LANGUAGE:CXX>:/Zc:preprocessor>")
+    target_compile_options(
+        ${target}
+        PRIVATE
+            "$<$<COMPILE_LANGUAGE:CXX>:/FI${_win_root}/private/tt_umd_windows_private_prelude.h>"
+        INTERFACE
+            "$<$<COMPILE_LANGUAGE:CXX>:/FI${_win_root}/include/tt_umd_windows_prelude.h>"
+    )
+endfunction()
 
-# Linux-only sources: hugepages/mmap, sysfs, /dev chardevs, robust pthread mutexes, hwloc, Unix
-# domain sockets. The ones whose symbols are needed are replaced by Windows implementations; the
-# simulation socket transport has no Windows counterpart and is only referenced from code that is
-# compiled with TT_UMD_BUILD_SIMULATION (unsupported on Windows).
+####################################################################################################
+# tt-umd-utils
+####################################################################################################
+
+tt_win_require_targets(tt-umd-utils)
+
+# The robust mutex is POSIX shared memory plus robust pthread mutexes; the Windows one is a named
+# kernel mutex. stacktrace_windows.cpp backs <execinfo.h>, which error_detail.hpp (tt-umd-utils'
+# public error types) uses.
+tt_win_remove_sources(tt-umd-utils src/robust_mutex.cpp)
+target_sources(
+    tt-umd-utils
+    PRIVATE
+        "${_win_root}/tt-umd-utils/src/robust_mutex_windows.cpp"
+        "${_win_root}/tt-umd-utils/src/stacktrace_windows.cpp"
+)
+tt_win_remove_link_items(tt-umd-utils rt)
+tt_win_configure_umd_library(tt-umd-utils)
+
+####################################################################################################
+# tt-umd-base (UMD core) and tt-umd (workload layer)
+####################################################################################################
+
+tt_win_require_targets(tt-umd-base tt-umd)
+
+# Linux-only sources: hugepages/mmap, sysfs, /dev chardevs, hwloc, Unix domain sockets. The ones
+# whose symbols are needed are replaced by Windows implementations; the simulation socket transport
+# has no Windows counterpart and is only referenced from code that is compiled with
+# TT_UMD_BUILD_SIMULATION (unsupported on Windows).
 tt_win_remove_sources(
-    tt-umd
+    tt-umd-base
     src/pcie/pci_device.cpp
     src/hugepage.cpp
     src/cpuset_lib.cpp
     src/chip_helpers/silicon_sysmem_manager.cpp
-    src/utils/robust_mutex.cpp
     src/warm_reset.cpp
     src/simulation/simulation_server_socket.cpp
     src/simulation/simulation_client.cpp
     src/simulation/simulation_server_transport.cpp
 )
 target_sources(
-    tt-umd
+    tt-umd-base
     PRIVATE
         "${_win_root}/tt-umd/src/pcie/pci_device_windows.cpp"
         "${_win_root}/tt-umd/src/chip_helpers/silicon_sysmem_manager_windows.cpp"
-        "${_win_root}/tt-umd/src/utils/robust_mutex_windows.cpp"
-        "${_win_root}/tt-umd/src/utils/stacktrace_windows.cpp"
         "${_win_root}/tt-umd/src/warm_reset_windows.cpp"
         "${_win_root}/compat/posix_compat_windows.cpp"
 )
-tt_win_remove_link_items(tt-umd hwloc rt)
-
-# Shadow headers and POSIX stand-ins come BEFORE upstream's api/ directory. compat/public is needed
-# by consumers because upstream public headers include <dlfcn.h>, <execinfo.h>, <cxxabi.h> and
-# <pthread.h>; compat/private (<unistd.h>, <sys/mman.h>) only by tt-umd's own sources and tests.
-target_include_directories(
-    tt-umd
-    BEFORE
-    PUBLIC
-        "$<BUILD_INTERFACE:${_win_root}/include>"
-        "$<BUILD_INTERFACE:${_win_root}/compat/public>"
-    PRIVATE
-        "${_win_root}/compat/private"
-)
-
-# Designated initializers in public headers need C++20 on MSVC; tt-logger's macros use __VA_OPT__,
-# which needs the conforming preprocessor. Both PUBLIC, as consumers compile those headers too.
-target_compile_features(tt-umd PUBLIC cxx_std_20)
-target_compile_options(tt-umd PUBLIC "$<$<COMPILE_LANGUAGE:CXX>:/Zc:preprocessor>")
-# Forced includes: consumers get only the header-free public prelude (pid_t,
-# __atomic_always_lock_free); tt-umd's own sources get the private one, which adds <windows.h>
-# (whose IN/OUT/ERROR/... macros must not reach consumer code) on top of it.
-target_compile_options(
-    tt-umd
-    PRIVATE
-        "$<$<COMPILE_LANGUAGE:CXX>:/FI${_win_root}/private/tt_umd_windows_private_prelude.h>"
-    INTERFACE
-        "$<$<COMPILE_LANGUAGE:CXX>:/FI${_win_root}/include/tt_umd_windows_prelude.h>"
-)
+tt_win_remove_link_items(tt-umd-base hwloc rt)
+tt_win_configure_umd_library(tt-umd-base)
+tt_win_configure_umd_library(tt-umd)
 
 # GCC attributes in two sources (noinline, tls_model) carry no meaning for the Windows build.
 # Scoped to these files so that an attribute anywhere else is still a compile error.
-get_target_property(_umd_source_dir tt-umd SOURCE_DIR)
+get_target_property(_umd_source_dir tt-umd-base SOURCE_DIR)
 foreach(_source IN ITEMS src/pcie/tlb_window.cpp src/pcie/silicon_tlb_window.cpp)
     if(NOT EXISTS "${_umd_source_dir}/${_source}")
         tt_win_fail("upstream source '${_umd_source_dir}/${_source}' no longer exists.")
@@ -227,7 +259,7 @@ foreach(_source IN ITEMS src/pcie/tlb_window.cpp src/pcie/silicon_tlb_window.cpp
 endforeach()
 set_source_files_properties(
     "${_umd_source_dir}/src/pcie/tlb_window.cpp"
-    TARGET_DIRECTORY tt-umd
+    TARGET_DIRECTORY tt-umd-base
     PROPERTIES
         COMPILE_OPTIONS
             "/FI${_win_root}/private/tt_umd_windows_gnu_attributes.h"
@@ -235,7 +267,7 @@ set_source_files_properties(
 # The SIGBUS guard: see windows/private/tt_umd_windows_sigbus.h.
 set_source_files_properties(
     "${_umd_source_dir}/src/pcie/silicon_tlb_window.cpp"
-    TARGET_DIRECTORY tt-umd
+    TARGET_DIRECTORY tt-umd-base
     PROPERTIES
         COMPILE_OPTIONS
             "/FI${_win_root}/private/tt_umd_windows_gnu_attributes.h;/FI${_win_root}/private/tt_umd_windows_sigbus.h"
@@ -254,6 +286,7 @@ if(TT_UMD_BUILD_TESTS)
         umd_misc_tests
         unified_tests
         test_utils_tests
+        tt_umd_utils_tests
     )
 
     # googletest is added through CPM as "GTest", and FetchContent lowercases that to "gtest",
@@ -270,9 +303,12 @@ if(TT_UMD_BUILD_TESTS)
     target_include_directories(test_common BEFORE INTERFACE "${_win_root}/compat/private" "${_win_root}/tests/compat")
     target_compile_options(test_common INTERFACE "$<$<COMPILE_LANGUAGE:CXX>:/FI${_win_root}/tests/test_prelude.h>")
 
-    # Tests built on fork()/waitpid(), POSIX signals, /dev/shm or Unix domain sockets, or on the
-    # Linux-only sources removed from tt-umd above.
-    tt_win_remove_sources(api_tests test_sysmem_manager.cpp test_warm_reset.cpp)
+    # tt-umd-utils' tests link the library directly rather than through test_common.
+    tt_win_remove_link_items(tt_umd_utils_tests pthread)
+
+    # Tests built on fork()/waitpid(), POSIX signals, /dev/shm, /proc, perf_event or Unix domain
+    # sockets, or on the Linux-only sources removed from tt-umd-base above.
+    tt_win_remove_sources(api_tests test_sysmem_manager.cpp test_warm_reset.cpp test_frame_pointer.cpp)
     tt_win_remove_sources(
         baremetal_tests
         test_long_jump.cpp
@@ -281,10 +317,11 @@ if(TT_UMD_BUILD_TESTS)
         test_simulation_client.cpp
         test_simulation_server_transport.cpp
         test_eth_ipc.cpp
+        test_pci_device_ctor_failure.cpp
     )
     tt_win_remove_sources(destructive_tests test_safe_io_warm_reset.cpp)
-    tt_win_remove_sources(umd_misc_tests test_robust_mutex.cpp)
-    tt_win_remove_sources(unified_tests multiprocess.cpp)
+    tt_win_remove_sources(tt_umd_utils_tests test_robust_mutex.cpp)
+    tt_win_remove_sources(unified_tests "${_umd_root}/tt-umd-workload/tests/unified/multiprocess.cpp")
     if(TARGET umd_microbenchmark)
         tt_win_remove_sources(umd_microbenchmark benchmarks/pcie_dma/test_pcie_dma.cpp benchmarks/iommu/test_iommu.cpp)
     endif()

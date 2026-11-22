@@ -2,9 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Forced-include (/FI) prelude for tt-umd's own C++ sources (PRIVATE on the tt-umd target) and,
-// through windows/tests/test_prelude.h, for the test binaries. Never applied to consumers: see
-// windows/include/tt_umd_windows_prelude.h for the part they get.
+// Forced-include (/FI) prelude for UMD's own C++ sources (PRIVATE on the tt-umd-utils, tt-umd-base
+// and tt-umd targets) and, through windows/tests/test_prelude.h, for the test binaries. Never
+// applied to consumers: see windows/include/tt_umd_windows_prelude.h for the part they get.
 
 #pragma once
 

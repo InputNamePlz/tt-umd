@@ -3,8 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Forced-include (/FI) prelude for every C++ translation unit that consumes tt-umd on Windows
-// (INTERFACE on the tt-umd target). It supplies the few POSIX/GCC spellings that tt-umd's public
-// headers rely on, so that those headers compile unmodified with MSVC.
+// (INTERFACE on the tt-umd-utils, tt-umd-base and tt-umd targets). It supplies the few POSIX/GCC
+// spellings that tt-umd's public headers rely on, so that those headers compile unmodified with
+// MSVC.
 //
 // Everything here leaks into every consumer translation unit, so it must stay minimal and must not
 // include any header: in particular not <windows.h>, whose object-like macros (IN, OUT, ERROR,

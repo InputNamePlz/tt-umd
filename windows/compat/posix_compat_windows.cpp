@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Backends for the POSIX stand-in headers under windows/compat/ (dlfcn.h, unistd.h, sys/mman.h).
-// The stack-trace backend for execinfo.h lives in windows/tt-umd/src/utils/stacktrace_windows.cpp.
+// The stack-trace backend for execinfo.h lives in windows/tt-umd-utils/src/stacktrace_windows.cpp.
 // Each function supports exactly the subset its header documents and aborts on anything else, so
 // an upstream change that starts relying on more of the POSIX API fails loudly instead of quietly
 // misbehaving.

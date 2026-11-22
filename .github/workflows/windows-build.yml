@@ -107,6 +107,10 @@ jobs:
         run: .build/windows-msvc/test/umd/baremetal/baremetal_tests.exe --gtest_filter="${{ steps.filter.outputs.gtest_filter }}"
         shell: bash
 
+      - name: Run tt_umd_utils_tests (host-only)
+        run: .build/windows-msvc/test/umd/utils/tt_umd_utils_tests.exe --gtest_filter="${{ steps.filter.outputs.gtest_filter }}"
+        shell: bash
+
       - name: Run api_tests simulation-sysmem subset (host-only)
         run: .build/windows-msvc/test/umd/api/api_tests.exe --gtest_filter="ApiSimulationSysmemManager.*"
         shell: bash

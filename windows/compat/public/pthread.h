@@ -4,7 +4,7 @@
 
 // Windows stand-in for <pthread.h>, used only by tt-umd/utils/robust_mutex.hpp (public), whose
 // private members name pthread_mutex_t. The Windows RobustMutex
-// (windows/tt-umd/src/utils/robust_mutex_windows.cpp) is a named kernel mutex and never touches
+// (windows/tt-umd-utils/src/robust_mutex_windows.cpp) is a named kernel mutex and never touches
 // these members, so only the type is provided; there are no pthread functions.
 
 #pragma once
