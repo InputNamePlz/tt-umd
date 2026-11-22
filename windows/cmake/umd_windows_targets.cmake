@@ -151,6 +151,14 @@ tt_win_check_shadowed(
     "b1d74c365fab797c0f89d61632652766570f3531ffb4c72a7c1927ab31a0fa46"
 )
 
+# windows/private/shadow/simulation/simulator_paths.hpp replaces tt-umd/src/simulation/simulator_paths.hpp
+# (explicit path-to-string conversions) for tt-umd-base's and tt-umd's own sources.
+tt_win_check_shadowed(
+    "tt-umd/src/simulation/simulator_paths.hpp"
+    "private/shadow/simulation/simulator_paths.hpp"
+    "b316bb7cc508b35b537e40b8ae677e8d95541ada60d0ca786f102fcf7ef60710"
+)
+
 ####################################################################################################
 # tt-kmd-lib: tt-wind driver backend instead of the Linux ioctl one
 ####################################################################################################
@@ -248,6 +256,10 @@ target_sources(
 tt_win_remove_link_items(tt-umd-base hwloc rt)
 tt_win_configure_umd_library(tt-umd-base)
 tt_win_configure_umd_library(tt-umd)
+# Private shadow headers, ahead of upstream's src/ directory (see the shadow list above).
+foreach(_target IN ITEMS tt-umd-base tt-umd)
+    target_include_directories(${_target} BEFORE PRIVATE "${_win_root}/private/shadow")
+endforeach()
 
 # GCC attributes in two sources (noinline, tls_model) carry no meaning for the Windows build.
 # Scoped to these files so that an attribute anywhere else is still a compile error.

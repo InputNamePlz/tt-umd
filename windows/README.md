@@ -35,6 +35,7 @@ targets; consumers of `umd::tt-umd` get no `<windows.h>` and none of its macros.
 | `private/tt_umd_windows_private_prelude.h` | Forced include for UMD's own sources (PRIVATE) and tests: the public prelude, then `windows.h` plus `#undef IGNORE`/`STRICT`/`ERROR` (they collide with upstream enumerators). |
 | `private/tt_umd_windows_{gnu_attributes,sigbus}.h` | Per-file forced includes for `tlb_window.cpp` / `silicon_tlb_window.cpp`. |
 | `include/tt-umd/driver_atomics.hpp` | Shadow of the upstream header (MSVC intrinsics). Its upstream original is hash-checked at configure time. |
+| `private/shadow/simulation/simulator_paths.hpp` | Private shadow of an upstream header (explicit `path.string()` conversions), hash-checked the same way. |
 | `tt-umd-utils/src/` | Windows `RobustMutex` (named kernel mutex) and the `execinfo.h` stack-trace backend. |
 | `compat/public`, `compat/private` | POSIX stand-in headers (`dlfcn.h`, `execinfo.h`, `cxxabi.h`, `pthread.h`; `unistd.h`, `sys/mman.h`) with backends in `compat/posix_compat_windows.cpp`. Each supports only the documented subset and aborts otherwise. |
 | `tests/` | Test prelude (`setenv`, `fcntl` stub), test-only `sys/wait.h`, `gtest_exclude.txt`. |
