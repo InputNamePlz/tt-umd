@@ -32,7 +32,7 @@ targets; consumers of `umd::tt-umd` get no `<windows.h>` and none of its macros.
 | `cmake/umd_windows.cmake` | Runs right after `project(umd)`: directory-level MSVC flags, defers the target fix-ups. |
 | `cmake/umd_windows_targets.cmake` | Runs when all targets exist: swaps Linux-only sources of `tt-kmd-lib`, `tt-umd-utils` and `tt-umd-base` for `windows/**/*_windows.*`, drops Linux libraries (hwloc, rt, pthread) and GCC-only flags (`-W...`, `-fno-omit-frame-pointer`), adds include paths and forced includes to `tt-umd-utils`, `tt-umd-base` and `tt-umd`, filters fork / POSIX-signal / `/proc` tests. Every upstream name it relies on is checked; drift is a configure `FATAL_ERROR`. |
 | `include/tt_umd_windows_prelude.h` | Forced include (`/FI`, INTERFACE, so consumers get it): `pid_t`, `__atomic_always_lock_free`. Includes nothing. |
-| `private/tt_umd_windows_private_prelude.h` | Forced include for UMD's own sources (PRIVATE) and tests: the public prelude, then `windows.h` plus `#undef IGNORE`. |
+| `private/tt_umd_windows_private_prelude.h` | Forced include for UMD's own sources (PRIVATE) and tests: the public prelude, then `windows.h` plus `#undef IGNORE`/`STRICT`/`ERROR` (they collide with upstream enumerators). |
 | `private/tt_umd_windows_{gnu_attributes,sigbus}.h` | Per-file forced includes for `tlb_window.cpp` / `silicon_tlb_window.cpp`. |
 | `include/tt-umd/driver_atomics.hpp` | Shadow of the upstream header (MSVC intrinsics). Its upstream original is hash-checked at configure time. |
 | `tt-umd-utils/src/` | Windows `RobustMutex` (named kernel mutex) and the `execinfo.h` stack-trace backend. |

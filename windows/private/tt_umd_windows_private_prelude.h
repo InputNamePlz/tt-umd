@@ -14,6 +14,11 @@
 // and the macro clean-up below sticks. NOMINMAX / WIN32_LEAN_AND_MEAN come from the build.
 #include <windows.h>
 
-// winbase.h defines IGNORE as an object-like macro (a Win16 relic), which would mangle the
-// TopologyDiscoveryOptions::Action::IGNORE enumerator.
+// Object-like macros from <windows.h> that collide with upstream enumerators. None of them is
+// used after <windows.h> itself has been processed:
+//  - IGNORE (winbase.h, a Win16 relic): TopologyDiscoveryOptions::Action::IGNORE.
+//  - STRICT (windef.h, only selects the handle typedefs while windows.h is read): IoOrdering::STRICT.
+//  - ERROR (wingdi.h, a GDI region-function result): DmaTransferState::ERROR.
 #undef IGNORE
+#undef STRICT
+#undef ERROR
