@@ -16,6 +16,10 @@
 //    direct BAR0 register writes (see configure_tlb below).
 //  - DMA (pin pages / DMA buffers), reset, power state and sysfs-derived attributes are not
 //    supported by the driver yet; those entry points throw. numa_node is -1 and revision 0.
+//  - The driver's scalar NOC accesses (Quasar) are not implemented yet: tt_noc_read/write_scalar
+//    return -ENOSYS, so noc_read_scalar()/noc_write_scalar() throw like a refused access on Linux.
+//  - tt-wind has no power-aware open mode (the tt-kmd >= 2.6.0 O_APPEND opt-in); kmd_version reads
+//    0.0.0, so every open is a legacy one, as on Linux with an old KMD.
 
 #include "tt-umd/pcie/pci_device.hpp"
 
@@ -30,10 +34,10 @@
 #include <tt-logger/tt-logger.hpp>
 #include <vector>
 
-#include "common/utils.hpp"
 #include "tt-kmd-lib/pci_ids.h"
 #include "tt-kmd-lib/tt_kmd_lib.h"
 #include "tt-kmd-lib/tt_kmd_lib_windows.h"
+#include "tt-umd-utils/internal/string_utils.hpp"
 #include "tt-umd/pcie/silicon_tlb_handle.hpp"
 #include "tt-umd/utils/error.hpp"
 
@@ -51,16 +55,18 @@ constexpr size_t TLB_2M_WINDOW_SIZE = 1ULL << 21;
 
 }  // namespace
 
-tt::ARCH PciDeviceInfo::get_arch() const {
-    if (this->device_id == TT_WORMHOLE_PCI_DEVICE_ID) {
+tt::ARCH arch_from_pci_device_id(uint16_t device_id) {
+    if (device_id == TT_WORMHOLE_PCI_DEVICE_ID) {
         return tt::ARCH::WORMHOLE_B0;
-    } else if (this->device_id == TT_BLACKHOLE_PCI_DEVICE_ID) {
+    } else if (device_id == TT_BLACKHOLE_PCI_DEVICE_ID) {
         return tt::ARCH::BLACKHOLE;
-    } else if (this->device_id == TT_QUASAR_PCI_DEVICE_ID) {
+    } else if (device_id == TT_QUASAR_PCI_DEVICE_ID) {
         return tt::ARCH::QUASAR;
     }
     return tt::ARCH::Invalid;
 }
+
+tt::ARCH PciDeviceInfo::get_arch() const { return arch_from_pci_device_id(this->device_id); }
 
 std::vector<int> PCIDevice::get_all_device_ids() {
     int count = tt_windows_device_count();
@@ -227,13 +233,23 @@ std::optional<uint32_t> PCIDevice::get_current_link_width() const { return std::
 PCIDevice::PCIDevice(int pci_device_number) :
     device_path(std::to_string(pci_device_number)),
     pci_device_num(pci_device_number),
-    pci_device_file_desc(-1),  // no POSIX fd on Windows; all access goes through tt_device_handle
     info(read_device_info(device_path)),
     numa_node(-1),  // NUMA affinity not exposed by the driver yet
     revision(0),    // PCI revision not exposed by the driver yet
     arch(info.get_arch()),
     kmd_version(read_kmd_version()),
+    // pci_device_file_desc stays -1: no POSIX fd on Windows; all access goes through tt_device_handle.
     iommu_enabled(false) {
+    // The destructor does not run for a constructor that throws, so release whatever was acquired before the throw.
+    try {
+        construct_resources();
+    } catch (...) {
+        release_resources();
+        throw;
+    }
+}
+
+void PCIDevice::construct_resources() {
     bar2_uc_size = 0;
 
     int ret_code = tt_device_open(device_path.c_str(), &tt_device_handle, 0);
@@ -241,9 +257,10 @@ PCIDevice::PCIDevice(int pci_device_number) :
         UMD_THROW(
             error::RuntimeError,
             fmt::format(
-                "tt_device_open failed with error code {} for PCI device with device ID {}.",
+                "tt_device_open failed with error code {} for PCI device with device ID {} ({}).",
                 ret_code,
-                pci_device_number));
+                pci_device_num,
+                info.pci_bdf));
     }
 
     log_debug(LogUMD, "Opened PCI device {} (tt-wind backend)", pci_device_num);
@@ -251,17 +268,14 @@ PCIDevice::PCIDevice(int pci_device_number) :
     tt_bar_mappings_t bar_mappings{};
     int mappings_ret = tt_device_query_bar_mappings(tt_device_handle, &bar_mappings);
     if (mappings_ret != 0) {
-        tt_device_close(tt_device_handle);
-        tt_device_handle = nullptr;
         UMD_THROW(
             error::RuntimeError,
-            fmt::format("Query mappings failed on device {}: {}", pci_device_num, strerror(-mappings_ret)));
+            fmt::format(
+                "Query mappings failed on device {} ({}): {}", pci_device_num, info.pci_bdf, strerror(-mappings_ret)));
     }
 
     if (bar_mappings.resource0_uc.id != TT_BAR_MAPPING_RESOURCE0_UC ||
         bar_mappings.resource0_uc.size < bar0_mapping_offset + bar0_size) {
-        tt_device_close(tt_device_handle);
-        tt_device_handle = nullptr;
         UMD_THROW(error::RuntimeError, fmt::format("Device {} has no usable BAR0.", pci_device_num));
     }
 
@@ -270,8 +284,7 @@ PCIDevice::PCIDevice(int pci_device_number) :
     int ret = tt_windows_map_bar(
         tt_device_handle, 0, TT_MMIO_CACHE_MODE_UC, bar0_mapping_offset, bar0_size, &bar0);
     if (ret != 0) {
-        tt_device_close(tt_device_handle);
-        tt_device_handle = nullptr;
+        bar0 = nullptr;
         UMD_THROW(
             error::RuntimeError, fmt::format("BAR0 mapping failed for device {}: {}", pci_device_num, strerror(-ret)));
     }
@@ -295,25 +308,33 @@ PCIDevice::PCIDevice(int pci_device_number) :
     // dma_buffer stays empty; DMA paths check for that and fall back or throw.
 }
 
-PCIDevice::~PCIDevice() {
+void PCIDevice::release_resources() {
+    // Unmaps the BARs and closes the tt_device handle. Safe on a partially constructed device:
+    // every member starts out null.
+    if (tt_device_handle == nullptr) {
+        return;
+    }
     if (bar0 != nullptr) {
         tt_windows_unmap_bar(tt_device_handle, bar0);
+        bar0 = nullptr;
     }
     if (bar2_uc != nullptr) {
         tt_windows_unmap_bar(tt_device_handle, bar2_uc);
+        bar2_uc = nullptr;
     }
 
-    if (tt_device_handle != nullptr) {
-        int ret_code = tt_device_close(tt_device_handle);
-        if (ret_code != 0) {
-            log_warning(
-                LogUMD,
-                "tt_device_close failed with error code {} for PCI device with device ID {}.",
-                ret_code,
-                pci_device_num);
-        }
+    int ret_code = tt_device_close(tt_device_handle);
+    if (ret_code != 0) {
+        log_warning(
+            LogUMD,
+            "tt_device_close failed with error code {} for PCI device with device ID {}.",
+            ret_code,
+            pci_device_num);
     }
+    tt_device_handle = nullptr;
 }
+
+PCIDevice::~PCIDevice() { release_resources(); }
 
 uint64_t PCIDevice::map_for_hugepage(void * /*buffer*/, size_t /*size*/) {
     throw_not_supported("PCIDevice::map_for_hugepage");
@@ -424,6 +445,34 @@ bool PCIDevice::is_tlb_dmabuf_export_supported() { return false; }
 int PCIDevice::export_tlb_dmabuf(
     size_t /*window_size*/, const tlb_data & /*config*/, uint64_t /*offset*/, uint64_t /*size*/) {
     throw_not_supported("PCIDevice::export_tlb_dmabuf");
+}
+
+// As on Linux: tt-kmd-lib validates the access and asks the driver, and a refusal throws. tt-wind
+// does not implement the scalar path yet (-ENOSYS), so these always throw on a real device.
+static uint32_t to_library_flags(const NocAddressSpace space) {
+    return space == NocAddressSpace::DeviceLocal ? TT_NOC_FLAG_KLA : TT_NOC_FLAG_NONE;
+}
+
+uint64_t PCIDevice::noc_read_scalar(const uint64_t addr, const uint32_t width, const NocAddressSpace space) {
+    uint64_t value = 0;
+    const int ret = tt_noc_read_scalar(tt_device_handle, addr, &value, width, to_library_flags(space));
+
+    UMD_ASSERT(
+        ret == 0,
+        error::RuntimeError,
+        fmt::format("Reading {} bytes at 0x{:x} failed: {}.", width, addr, strerror(-ret)));
+
+    return value;
+}
+
+void PCIDevice::noc_write_scalar(
+    const uint64_t addr, const uint64_t value, const uint32_t width, const NocAddressSpace space) {
+    const int ret = tt_noc_write_scalar(tt_device_handle, addr, value, width, to_library_flags(space));
+
+    UMD_ASSERT(
+        ret == 0,
+        error::RuntimeError,
+        fmt::format("Writing {} bytes at 0x{:x} failed: {}.", width, addr, strerror(-ret)));
 }
 
 // The driver has no power-state interface yet; ignore quietly like old-KMD Linux does.
