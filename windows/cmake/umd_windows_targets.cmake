@@ -175,9 +175,10 @@ target_link_libraries(tt-kmd-lib PRIVATE cfgmgr32)
 
 # Applied to tt-umd-utils, tt-umd-base (the UMD core, an OBJECT library) and tt-umd (the workload
 # layer and the library consumers link, which links tt-umd-base publicly within the build).
-#  - Shadow headers and POSIX stand-ins come BEFORE upstream's api/ directories. compat/public is
-#    needed by consumers because upstream public headers include <execinfo.h>, <cxxabi.h> and
-#    <pthread.h>; compat/private (<unistd.h>, <sys/mman.h>) only by UMD's own sources and tests.
+#  - POSIX stand-ins come BEFORE upstream's api/ directories. compat/public is needed by consumers
+#    because upstream public headers include <execinfo.h>, <cxxabi.h> and <pthread.h>;
+#    compat/private (<unistd.h>, <sys/mman.h>) only by UMD's own sources and tests. The public
+#    shadow directory is added separately (see tt-umd-base below).
 #  - Designated initializers in public headers need C++20 on MSVC; tt-logger's macros use
 #    __VA_OPT__, which needs the conforming preprocessor. Both PUBLIC, as consumers compile those
 #    headers too.
@@ -189,7 +190,6 @@ function(tt_win_configure_umd_library target)
         ${target}
         BEFORE
         PUBLIC
-            "$<BUILD_INTERFACE:${_win_root}/include>"
             "$<BUILD_INTERFACE:${_win_root}/compat/public>"
         PRIVATE
             "${_win_root}/compat/private"
@@ -256,9 +256,23 @@ target_sources(
 tt_win_remove_link_items(tt-umd-base hwloc rt)
 tt_win_configure_umd_library(tt-umd-base)
 tt_win_configure_umd_library(tt-umd)
-# Private shadow headers, ahead of upstream's src/ directory (see the shadow list above).
+# Shadow headers, ahead of upstream's directories (see the shadow list above): the public ones
+# ahead of tt-umd/api, which tt-umd-base owns, the private ones ahead of its src/ directory.
+# windows/include goes only on tt-umd-base and tt-umd, never on tt-umd-utils. A parent project
+# that adds UMD with add_subdirectory(SYSTEM) makes every UMD target SYSTEM, so a directory that
+# tt-umd-base inherited from tt-umd-utils would become an /external:I path for tt-umd-base's own
+# sources, and MSVC searches those after every /I path, i.e. after tt-umd/api. Coming only from
+# tt-umd-base itself, it stays an ordinary /I path there, first. tt-umd's own sources get both it
+# and tt-umd/api from tt-umd-base, as /external:I paths in the same order.
 foreach(_target IN ITEMS tt-umd-base tt-umd)
-    target_include_directories(${_target} BEFORE PRIVATE "${_win_root}/private/shadow")
+    target_include_directories(
+        ${_target}
+        BEFORE
+        PUBLIC
+            "$<BUILD_INTERFACE:${_win_root}/include>"
+        PRIVATE
+            "${_win_root}/private/shadow"
+    )
 endforeach()
 
 # GCC attributes in two sources (noinline, tls_model) carry no meaning for the Windows build.
